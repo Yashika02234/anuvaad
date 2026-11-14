@@ -45,11 +45,20 @@ Every stage streams: LLM tokens flow into TTS while the sentence is still being 
 
    The last command downloads the Silero VAD model. On Windows, always run tools as `python -m …`: if Smart App Control is on, it can block the `pip.exe` launcher.
 
-2. Copy `.env.example` to `.env` and fill in:
+2. Create a file named `.env` in the project folder (it is git-ignored) with:
+
+   ```bash
+   LIVEKIT_URL=wss://your-project.livekit.cloud
+   LIVEKIT_API_KEY=...
+   LIVEKIT_API_SECRET=...
+   GROQ_API_KEY=...
+   ELEVEN_API_KEY=...
+   ```
+
    - `LIVEKIT_*`: a free project at cloud.livekit.io. The end-of-sentence model also runs through LiveKit Cloud inference.
    - `GROQ_API_KEY`: speech-to-text (Whisper) **and** translation (`openai/gpt-oss-120b`), both on the free tier.
    - `ELEVEN_API_KEY`: the Hindi voice. Alternatively set `TTS_PROVIDER=sarvam` and `SARVAM_API_KEY`.
-   - Optional: `LLM_PROVIDER=gemini` with a Google AI Studio `GOOGLE_API_KEY`.
+   - Optional: `LLM_PROVIDER=gemini` with a Google AI Studio `GOOGLE_API_KEY`. Other optional settings (models, voice, turn-taking timings) and their defaults are in `translator/config.py`.
 
 3. Run the agent and the web page in two terminals:
 
