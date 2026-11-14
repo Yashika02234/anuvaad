@@ -1,9 +1,9 @@
-"""Local web server: serves the UI (web/public) and the token endpoint.
+"""Local web server: serves the built React UI (web/dist) and the token endpoint.
 
 Run:  python -m uvicorn server:app --port 8000   then open http://localhost:8000
 
-In production the same files are hosted on Vercel (web/ folder): web/public is
-served as static files and web/api/token.py runs as a serverless function.
+In production the same app is hosted on Vercel (web/ folder): the React app is built
+there, and web/api/token.py runs as a serverless function.
 """
 
 from __future__ import annotations
@@ -33,4 +33,8 @@ def token(name: str = "speaker", code: str = "") -> JSONResponse:
     return JSONResponse(body, status_code=status)
 
 
-app.mount("/", StaticFiles(directory=ROOT / "web" / "public", html=True), name="ui")
+# the React app, built with `npm run build` in web/ (for live editing use `npm run dev` there,
+# which proxies /api to this server)
+DIST = ROOT / "web" / "dist"
+if DIST.exists():
+    app.mount("/", StaticFiles(directory=DIST, html=True), name="ui")

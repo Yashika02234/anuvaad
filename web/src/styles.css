@@ -26,6 +26,8 @@ body {
   color: var(--ink); font: 15px/1.55 var(--ui);
   -webkit-font-smoothing: antialiased;
 }
+/* React mounts into #root: let it fill the page so the conversation can sit above the mic */
+#root { flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
 button, select, input { font: inherit; color: inherit; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 ::selection { background: var(--sage-soft); }
