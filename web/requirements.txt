@@ -1,0 +1,2 @@
+# Only what the Vercel token function needs (the agent's heavy packages are in ../requirements.txt)
+livekit-api>=1.0

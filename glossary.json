@@ -1,0 +1,57 @@
+{
+  "_comment": "Edit freely. 'entities' are never translated. 'asr_corrections' fix common mis-hearings (lower-case keys). 'abbreviations' are translated with the given Hindi meaning.",
+  "entities": [
+    "Google Meet",
+    "Microsoft Teams",
+    "Zoom",
+    "Asterisk",
+    "LiveKit",
+    "WhatsApp",
+    "Slack",
+    "Jira",
+    "GitHub",
+    "Gmail",
+    "Excel",
+    "PowerPoint",
+    "Gnani",
+    "CEO",
+    "HR",
+    "AI",
+    "API",
+    "PDF",
+    "SIP",
+    "OTP",
+    "UPI"
+  ],
+  "asr_corrections": {
+    "google meat": "Google Meet",
+    "google mate": "Google Meet",
+    "asterix": "Asterisk",
+    "aster isk": "Asterisk",
+    "live kit": "LiveKit",
+    "life kit": "LiveKit",
+    "jeera": "Jira",
+    "git hub": "GitHub",
+    "whats app": "WhatsApp",
+    "g mail": "Gmail",
+    "gyani": "Gnani"
+  },
+  "abbreviations": {
+    "ETA": "पहुँचने का अनुमानित समय",
+    "EOD": "दिन के अंत तक",
+    "ASAP": "जितनी जल्दी हो सके",
+    "FYI": "आपकी जानकारी के लिए",
+    "WFH": "घर से काम",
+    "OOO": "ऑफ़िस से बाहर",
+    "PTO": "छुट्टी",
+    "TBD": "अभी तय होना बाकी है",
+    "AFAIK": "जहाँ तक मुझे पता है",
+    "KPI": "प्रदर्शन संकेतक (KPI)",
+    "DM": "सीधा मैसेज",
+    "POC": "संपर्क व्यक्ति"
+  },
+  "_pronunciations_comment": "Audio only: how the Hindi voice should SAY a name. Use it only when the voice gets a name wrong: tests showed ElevenLabs reads English names in Latin letters correctly, and Devanagari re-spellings made some worse (Asterisk -> 'S-Risk'). ALL-CAPS short forms (HR, PDF, OTP) are spelled out automatically.",
+  "pronunciations": {
+    "Gnani": "ज्ञानी"
+  }
+}
