@@ -1,161 +1,80 @@
-# Live English → Hindi Voice Interpreter
+# Bolo: Live English → Hindi Voice Interpreter
 
-**Live demo:** https://live-hindi-interpreter.vercel.app (the access code is shared separately, so the API credits aren't open to everyone)
+**Live demo:** [live-hindi-interpreter.vercel.app](https://live-hindi-interpreter.vercel.app). The access code is shared separately, so the API credits aren't open to everyone.
 
-Real-time voice-to-voice translation: English speech goes in, and fluent Hindi speech comes out in near real time (about 1.5–2 s from the end of a sentence to the first Hindi audio).
+Speak English and hear it in natural Hindi a moment later. Bolo listens to live speech, understands what was meant, translates it into everyday spoken Hindi, and speaks it out loud. It takes about **1.2–2 seconds** from the end of a sentence to the first Hindi audio.
 
-Built on **LiveKit Agents**, which handles WebRTC transport, VAD, turn-taking, interruptions and worker scaling. Every AI stage can be swapped with an env var, and all defaults run on free tiers.
+![Bolo during a live session](docs/ui.png)
 
-![UI](docs/ui.png)
+## How it works
 
-## The assembly line
+Bolo works like an assembly line, and every step starts before the previous one has finished:
 
-```
- Browser mic ──WebRTC──► LiveKit ──► Agent worker (Python)
- (echo-cancelled)          SFU        │
-                                      ├─ 1. Silero VAD + turn detector     "has the speaker finished?"
-                                      ├─ 2. STT: Whisper-large-v3-turbo    (Groq)  | Sarvam (Indian-English)
-                                      │        + vocabulary prompt (Google Meet, Asterisk…)
-                                      ├─ 3. Gate  (on_user_turn_completed)
-                                      │        drop filler-only / hallucinated / noise / Hindi turns
-                                      │        hold half sentences ("move the meeting to…")
-                                      ├─ 4. Clean + translate  (llm_node, Groq gpt-oss-120b | Gemini)
-                                      │        ASR fixes → filler removal → entity masking
-                                      │        → localization hints → tone → LLM → unmask (streaming)
-                                      ├─ 5. TTS prep (tts_node): numbers → Hindi words for audio only
-                                      └─ 6. Hindi TTS: ElevenLabs Flash v2.5 | Sarvam Bulbul
- Browser ◄──WebRTC── Hindi audio + live transcripts + latency events
-   ├─ plays Hindi immediately (streaming)
-   ├─ records each Hindi line as a clip  → "ready to play" ▶ per line
-   └─ records the whole session          → ⬇ download
-```
-
-Every stage streams: LLM tokens flow into TTS while the sentence is still being generated, and TTS audio starts playing on the first chunk.
-
-## Quick start
-
-1. Install:
-
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate          # Windows: .venv\Scripts\activate
-   python -m pip install -r requirements.txt
-   python -m livekit.agents download-files
-   ```
-
-   The last command downloads the Silero VAD model. On Windows, always run tools as `python -m …`: if Smart App Control is on, it can block the `pip.exe` launcher.
-
-2. Create a file named `.env` in the project folder (it is git-ignored) with:
-
-   ```bash
-   LIVEKIT_URL=wss://your-project.livekit.cloud
-   LIVEKIT_API_KEY=...
-   LIVEKIT_API_SECRET=...
-   GROQ_API_KEY=...
-   ELEVEN_API_KEY=...
-   ```
-
-   - `LIVEKIT_*`: a free project at cloud.livekit.io. The end-of-sentence model also runs through LiveKit Cloud inference.
-   - `GROQ_API_KEY`: speech-to-text (Whisper) **and** translation (`openai/gpt-oss-120b`), both on the free tier.
-   - `ELEVEN_API_KEY`: the Hindi voice. Alternatively set `TTS_PROVIDER=sarvam` and `SARVAM_API_KEY`.
-   - Optional: `LLM_PROVIDER=gemini` with a Google AI Studio `GOOGLE_API_KEY`. Other optional settings (models, voice, turn-taking timings) and their defaults are in `translator/config.py`.
-
-3. Run the agent and the web page in two terminals:
-
-   ```bash
-   python -m translator.agent dev
-   ```
-
-   ```bash
-   python -m uvicorn server:app --port 8000
-   ```
-
-4. Open http://localhost:8000, click **Start session**, and say:
-   *"Can we move the meeting to 5 PM tomorrow?"*
-
-Use headphones for the best experience. Echo cancellation is on, but headphones remove the Hindi output from the mic completely.
-
-### Test without a microphone
-
-```bash
-pytest
-```
-
-This runs 67 tests and needs no API keys.
-
-```bash
-python scripts/eval_translation.py
-```
-
-This runs the edge-case sentences through the real LLM, text only.
-
-```bash
-python scripts/eval_translation.py "Your own sentence"
-```
+1. **Listen.** The browser streams the microphone (with echo cancellation) over WebRTC through LiveKit.
+2. **Know when a sentence is done.** Voice-activity detection and an end-of-sentence model decide when the speaker has finished, so half sentences aren't translated too early.
+3. **Transcribe.** Whisper (large-v3 turbo, on Groq) turns the speech into English text, guided by a list of names it should spell correctly.
+4. **Clean up.** Fillers, noise, mis-heard names and speech-to-text glitches are removed or fixed. Times, dates, money and abbreviations get Hindi hints.
+5. **Translate.** A large language model (gpt-oss-120b on Groq) translates into natural, office-style Hindi in the right tone, and does nothing but translate.
+6. **Speak.** ElevenLabs Flash v2.5 says the Hindi aloud. Before speaking, numbers and times are rewritten the way a Hindi speaker says them.
+7. **Show.** The page shows the English, the Hindi, a replay button, the time taken, and what was handled on each line.
 
 ## How each edge case is handled
 
-| Edge case | Handling | Where |
-|---|---|---|
-| **Strong accent / fast speech** | Whisper large-v3 with a **vocabulary prompt** built from the glossary. Glossary `asr_corrections` fix known mis-hearings ("google meat" → Google Meet). The LLM is told the text comes from ASR and to translate what was *meant*. `STT_PROVIDER=sarvam` switches to a model trained on Indian-accented English. | `config.make_stt`, `text_processing.fix_asr_errors`, prompt rule 1 |
-| **Named entities** ("Google Meet", "Asterisk") | Replaced by `[[1]]`-style tokens before the LLM sees the text, so they can't be translated. The LLM is told what each token means, so Hindi grammar around it is right ("[[1]] पर"). Tokens are restored by a **streaming-safe unmasker** (a token split across chunks still works). Names that are **not** in the glossary are handled by the prompt: company/product/app names stay in English letters (Zendesk, Salesforce), people and places are written in Devanagari (Priya → प्रिया), with a few-shot example. | `mask_entities`, `StreamingUnmasker`, `prompts.py` rule 8 |
-| **Partial / incomplete input** | (a) LiveKit's **turn-detector model** waits longer after "…move the meeting to". (b) A rule-based check holds utterances ending in dangling words (*to, the, because…*) and merges them with the next one. (c) If the speaker really stops, the held text is translated after `INCOMPLETE_HOLD_SECONDS`. The UI merges the fragments into one row. | `looks_incomplete`, `on_user_turn_completed`, `_flush_held_after_timeout` |
-| **Fillers** ("uh", "you know") | Deterministic removal: sounds always; phrases only when comma-delimited, so "I like pizza" and "what kind of car" are untouched. Stutters ("I I") are collapsed. Filler-only turns are **not spoken at all**. The LLM has the same rule as a backup. | `remove_fillers`, `is_hallucination` |
-| **Whisper hallucinations on silence / noise** ("Thanks for watching!", "Me. Me. Me.", the model repeating its own vocabulary prompt) | Repetition loops are removed and noise-only sentences dropped, while real speech in the same turn is kept. Prompt echoes are dropped. Hindi speech (Devanagari ASR output) is skipped because the input language is English. Romanised Hinglish ("waise to kya") is translated into proper Devanagari. Each dropped turn shows its reason in the UI. | `strip_noise_sentences`, `is_prompt_echo`, `is_not_english`, prompt rule 8 |
-| **Latency buildup** | Everything streams (STT → LLM tokens → TTS). Preemptive generation starts translating before end-of-turn is final. Flash-tier LLM and TTS models are used. TTS speed is 1.05×. The LLM gets only the last 2 lines of context, so prompts stay small and constant. Per-stage latency is logged and shown in the UI. | `agent.entrypoint`, `config` |
-| **Tone** (formal vs casual Hindi) | Formal/casual markers in the current and recent utterances ("sir, kindly" vs "hey dude, gonna") select आप or तुम. The default is formal, the safe choice in Hindi. A UI toggle can force either. | `detect_tone`, RPC `set_tone` |
-| **Numbers, dates, abbreviations** | Deterministic hints are given to the LLM: `5 PM → शाम 5 बजे`, `5:30 → साढ़े 5`, `2:30 → ढाई`, `6:45 → पौने 7`, `March 5th → 5 मार्च`, `$500 → 500 डॉलर`, `20% → 20 प्रतिशत`, `tomorrow → कल` (tense tells tomorrow from yesterday), `ETA → पहुँचने का अनुमानित समय`. For **audio only**, digits become Hindi words (`5 → पाँच`, `1,25,000 → एक लाख पच्चीस हज़ार`), so the voice never says "five" mid-Hindi. The on-screen text keeps digits. | `localization_hints`, `hindi_time`, `StreamingNumberVerbalizer` |
-| **Interruptions** (speech overlapping TTS) | WebRTC echo cancellation. `OVERLAP_MODE=interrupt` (default): the speaker talking for 0.6 s or more stops the Hindi playback (barge-in). Noise that isn't speech resumes playback. `OVERLAP_MODE=queue`: interpreter style, where translations are never cut off. Interrupted lines are flagged in the UI. | `turn_handling` in `agent.entrypoint` |
-| **LLM answering instead of translating** | Strict system prompt ("you are NOT an assistant") plus few-shot examples. The LLM never sees the raw chat history, only a fresh translation prompt each turn. | `prompts.py`, `llm_node` |
-
-## Input modes
-
-Listening never starts on its own: the speaker first taps the mic (or **Start session**) and allows the microphone. After that:
-
-- **Hands-free** (default): no button to hold. The speaker just talks and pauses, and VAD and the turn detector decide when a sentence is done.
-- **Hold to talk**: hold the mic button or the Space bar. Releasing commits the turn immediately (`commit_user_turn`), which suits noisy rooms.
-
-## Project layout
-
-```
-translator/
-  agent.py            LiveKit agent: gating, llm_node, tts_node, RPCs, metrics
-  text_processing.py  all deterministic edge-case logic (pure Python, unit-tested)
-  prompts.py          system prompt, few-shot examples, per-turn message builder
-  config.py           env settings + STT/LLM/TTS provider factories
-server.py             token endpoint + serves the UI
-web/public/           index.html, app.js, style.css (no build step)
-web/api/token.py      token endpoint (Vercel serverless function; reused by server.py locally)
-Dockerfile            the agent image (LiveKit Cloud: lk agent create)
-glossary.json         names to keep, ASR corrections, abbreviations
-tests/                67 tests (text processing + agent with a fake LLM)
-scripts/eval_translation.py   real-LLM evaluation of edge cases (text only)
-```
-
-## Latency budget (targets)
-
-| Stage | Typical |
+| Edge case | What Bolo does |
 |---|---|
-| End-of-speech detection (VAD + turn detector) | 0.4–0.6 s |
-| STT (Groq Whisper turbo) | 0.2–0.4 s |
-| LLM first token (Groq gpt-oss-120b) | 0.3–0.5 s |
-| TTS first audio (ElevenLabs Flash) | 0.2–0.3 s |
-| **End of speech → first Hindi audio** | **≈ 1.4–2 s** |
+| **Strong accents, fast speech** | Whisper is given the important names in advance, and common mis-hearings are corrected ("google meat" → Google Meet). The translator is told the text came from speech recognition and translates what the speaker *meant*, not the exact mistakes. |
+| **Named entities** ("Google Meet", "Asterisk") | Known names are locked before translation, so they can never be translated, and the Hindi grammar around them still fits ("Google Meet पर"). Other names follow a simple rule: company, product and app names stay in English letters (Zendesk, Razorpay), and people and places are written in Hindi (Priya → प्रिया, Mumbai → मुंबई). |
+| **Partial sentences** | The end-of-sentence model waits longer after "…move the meeting to". A sentence that ends on a dangling word is held and joined with what follows. If the speaker really stops, the held part is translated anyway after a short pause. |
+| **Fillers** ("uh", "you know") | They are removed before translation, without touching real words ("I like pizza" stays). A turn that is only fillers is not spoken at all. |
+| **Noise and silence** | Speech recognition sometimes invents words on background noise ("Thank you.", "Me. Me. Me."). These are detected and skipped, and the page shows why. Hindi speech is skipped too, since the input is English. |
+| **Latency buildup** | Every step streams into the next, translation starts before the sentence is fully confirmed, fast models are used, and the prompt stays short. The time to first Hindi audio is shown on every line. |
+| **Formal vs casual tone** | Words like "sir, kindly" or "hey dude, gonna" decide between आप and तुम. Formal is the default, the safe choice in Hindi. The tone menu can also force either. |
+| **Numbers, dates, abbreviations** | Times are said the Hindi way: 5:30 → साढ़े पाँच, 10:15 → सवा दस, 2:45 → पौने तीन, 1:30 → डेढ़, 2:30 → ढाई. Also 5 PM → शाम 5 बजे, ₹1,500 → एक हज़ार पाँच सौ रुपये, 20% → बीस प्रतिशत, 3.75 करोड़ → पौने चार करोड़, ETA → पहुँचने का अनुमानित समय, HR → एचआर. The screen keeps the digits, and only the voice uses the words. |
+| **Interruptions** | Echo cancellation keeps the Hindi playback out of the microphone. If the speaker talks over the Hindi, playback stops (barge-in), and the line is marked "interrupted". |
+| **The model answering instead of translating** | The translator is strictly instructed that it is not an assistant, with examples, so a question like "What time is it?" is translated rather than answered. |
 
-The agent logs a line for every utterance, and the UI shows the same numbers.
+## Using it
 
-**Measured** (end-to-end voice test on a home Windows laptop, speech fed in as a microphone):
+Listening never starts on its own. First tap the mic (or **Start session**) and allow the microphone. Then:
 
-| Spoken English | Hindi output | ASR | LLM | TTS | Total |
-|---|---|---|---|---|---|
-| "Uh, can we move the meeting to 5 PM tomorrow?" | क्या हम मीटिंग को कल शाम 5 बजे कर सकते हैं? | 1066 ms | 338 ms | 246 ms | **1.70 s** |
-| "Please join the Google Meet, the Asterisk server is down." | कृपया Google Meet में जुड़िए, Asterisk सर्वर डाउन है। | 1178 ms | 444 ms | 248 ms | **1.93 s** |
+- **Hands-free** (default): just talk; a short pause ends each sentence.
+- **Hold to talk**: hold the mic button (or the Space bar) while speaking. Good for noisy rooms.
+- **Tone**: Auto, Formal (आप) or Casual (तुम).
+- **Replay and download**: every Hindi line has a ▶ Play button. The icons beside the mic download the transcript and the full Hindi audio.
 
-ASR includes the end-of-speech wait. Live sessions with a real microphone measured 1.4–1.9 s.
+Headphones give the cleanest experience.
 
-## Known limitations / next steps
+## Speed
 
-- Translation is per sentence, not word by word. That is deliberate: Hindi is verb-final (SOV), so it needs the whole clause.
-- Romanised Hinglish is handled by the LLM (prompt rule 8 + a few-shot example), but code-mixed speech is still recognised by an English ASR, so accuracy varies.
-- The ASR step is the largest share of latency, because Whisper works per utterance. A streaming ASR (e.g. Deepgram) would cut about 0.5 s.
-- Possible next steps: a SIP phone-call demo via LiveKit SIP, and per-speaker voices for multi-party calls.
+| Step | Typical time |
+|---|---|
+| Knowing the sentence has ended | 0.4–0.6 s |
+| Speech to English text | 0.2–0.4 s |
+| First words of the translation | 0.3–0.5 s |
+| First Hindi audio | 0.2–0.3 s |
+| **End of speech → first Hindi audio** | **≈ 1.2–2 s** |
+
+Measured on the live deployment:
+
+| Spoken English | Hindi | Total |
+|---|---|---|
+| "Uh, can we move the meeting to 5 PM tomorrow?" | क्या हम मीटिंग को कल शाम 5 बजे कर सकते हैं? | **1.4–1.8 s** |
+| "The meeting is at 5:30 pm today." | मीटिंग आज शाम साढ़े 5 बजे है। (spoken: साढ़े पाँच) | **1.2 s** |
+| "Please join the Google Meet, the Asterisk server is down." | कृपया Google Meet में जुड़िए, Asterisk सर्वर डाउन है। | **1.9 s** |
+
+## Quality checks
+
+- **Automated tests** cover all the edge-case rules: fillers, names, times and numbers, partial sentences, noise, and the spoken-Hindi rewriting.
+- **A translation check** runs tricky sentences through the real translator.
+- **A listening check** turns 20 tricky sentences into real Hindi audio, so pronunciation can be judged by ear, before and after each fix.
+
+## Built with
+
+LiveKit Agents (real-time audio and turn-taking) · Groq Whisper (speech to text) · Groq gpt-oss-120b (translation) · ElevenLabs Flash v2.5 (Hindi voice) · Vercel (web page) · LiveKit Cloud (agent hosting). Every service runs on its free tier.
+
+## Known limitations and next steps
+
+- Translation happens per sentence, not word by word. That's deliberate: Hindi puts the verb at the end, so it needs the whole sentence.
+- Hinglish (Hindi spoken in English words) works, but speech recognition is tuned for English, so accuracy varies.
+- Speech recognition is the slowest step. A streaming speech-to-text service would save about half a second.
+- Next ideas: phone-call support, and separate voices for different speakers in a group call.
