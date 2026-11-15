@@ -1,14 +1,14 @@
-# Bolo: Live English → Hindi Voice Interpreter
+# Anuvaad (अनुवाद): Live English → Hindi Voice Interpreter
 
-**Live demo:** [live-hindi-interpreter.vercel.app](https://live-hindi-interpreter.vercel.app). The access code is shared separately, so the API credits aren't open to everyone.
+**Live demo:** [anuvaadx.vercel.app](https://anuvaadx.vercel.app). The access code is shared separately, so the API credits aren't open to everyone.
 
-Speak English and hear it in natural Hindi a moment later. Bolo listens to live speech, understands what was meant, translates it into everyday spoken Hindi, and speaks it out loud. It takes about **1.2–2 seconds** from the end of a sentence to the first Hindi audio.
+Speak English and hear it in natural Hindi a moment later. Anuvaad listens to live speech, understands what was meant, translates it into everyday spoken Hindi, and speaks it out loud. It takes about **1.2–2 seconds** from the end of a sentence to the first Hindi audio.
 
-![Bolo during a live session](docs/ui.png)
+![Anuvaad during a live session](docs/ui.png)
 
 ## How it works
 
-Bolo works like an assembly line, and every step starts before the previous one has finished:
+Anuvaad works like an assembly line, and every step starts before the previous one has finished:
 
 1. **Listen.** The browser streams the microphone (with echo cancellation) over WebRTC through LiveKit.
 2. **Know when a sentence is done.** Voice-activity detection and an end-of-sentence model decide when the speaker has finished, so half sentences aren't translated too early.
@@ -21,7 +21,7 @@ An earlier version did the clean-up and the spoken-Hindi rewrite with hand-writt
 
 ## How each edge case is handled
 
-| Edge case | What Bolo does |
+| Edge case | What Anuvaad does |
 |---|---|
 | **Strong accents, fast speech** | The translator is told the text came from speech recognition and translates what the speaker *meant*: a word that makes no sense is replaced by the similar-sounding one that does ("google meat" → Google Meet, "next weak" → next week). |
 | **Named entities** ("Google Meet", "Asterisk") | Company, product and app names stay in English letters (Google Meet, Zendesk, Razorpay), with Hindi grammar around them ("Google Meet पर"). People and places are written in Hindi (Priya → प्रिया, Mumbai → मुंबई). |
