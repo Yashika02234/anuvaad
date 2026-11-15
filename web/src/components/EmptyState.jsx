@@ -10,8 +10,7 @@ const TRIES = [
   ["Interrupt", "Start talking while the Hindi is still playing."],
 ];
 
-/** Start screen: the promise on the left, things to try on the right.
- *  On phones the examples become swipeable cards with dots (see styles.css). */
+/** Start screen: headline and note, plus example sentences (cards with dots on phones). */
 export default function EmptyState() {
   const track = useRef(null);
   const [active, setActive] = useState(0);

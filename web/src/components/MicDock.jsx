@@ -10,13 +10,12 @@ const MODES = [
 
 /** Notice · mic (with halo) · status · controls (talk mode, tone, model). */
 export default function MicDock({ orb, connected, inputMode, notice, model, activeModel, tone }) {
-  // Hands-free: the mic toggles the session (tap to start, tap again to end).
-  // Hold to talk: pressing the mic means "talk", so that session is ended from the header.
+  // Hands-free: tap to start, tap again to end. Hold to talk: end from the header.
   const canEnd = connected && inputMode !== "ptt";
   const halo = useRef(null);
   const orbBtn = useRef(null);
 
-  // the voice level drives the halo ring directly (60 fps, so no React re-render)
+  // voice level drives the halo ring directly (no React re-render)
   useEffect(() => engine.onLevel((lvl) => {
     halo.current?.style.setProperty("--lvl", Math.min(1, lvl * 2.5).toFixed(2));
   }), []);

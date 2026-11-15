@@ -1,11 +1,7 @@
-"""GET /api/token -> LiveKit access token for a fresh room (the agent auto-joins it).
+"""GET /api/token -> LiveKit access token for a new room (the agent joins it).
 
-Runs as a Vercel serverless function in production; server.py reuses issue_token()
-for local development. Needs only `livekit-api` (see web/requirements.txt).
-
-Env: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, and optionally ACCESS_CODE
-(when set, the page must be opened as https://<host>/?code=<ACCESS_CODE> so strangers
-can't spend your API credits).
+Env: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, optional ACCESS_CODE
+(then the page must be opened with ?code=<ACCESS_CODE>).
 """
 
 from __future__ import annotations

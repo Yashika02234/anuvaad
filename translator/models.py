@@ -1,16 +1,7 @@
 """Translation models with automatic fallback and cheap recovery checks.
 
-One turn = one request. Models are tried in order; on an error (e.g. a provider's 429
-rate limit, or no reply within ATTEMPT_TIMEOUT) the next model gets the same request in
-the same turn. A model that failed is "busy" for every later turn (Auto and pinned
-choices share this), so no time is wasted on it.
-
-Getting a busy model back (instead of re-sending the full ~2.8k-token prompt, which is
-what LiveKit's FallbackAdapter does):
-    A. wait the time the provider asked for ("Please try again in 19.9s" / retry-after)
-    B. then send a tiny probe (a few tokens). For Groq models the reply headers also say
-       how many tokens are left this minute; the model is only marked available again
-       when a full turn fits (PROBE_MIN_TOKENS), otherwise wait for the reset and repeat.
+A failed model is marked busy and skipped. It is checked again after the wait the
+provider asked for, with a tiny probe (Groq: also the tokens left this minute).
 """
 
 from __future__ import annotations
@@ -73,7 +64,6 @@ class ModelChains:
         self._recovery: dict[str, asyncio.Task] = {}
         self._listeners: list[Callable[[str, bool], None]] = []
 
-    # -- order ---------------------------------------------------------------- #
     @property
     def names(self) -> list[str]:
         return ["auto", *self.order]
@@ -97,7 +87,6 @@ class ModelChains:
             except Exception:
                 logger.exception("model status listener failed")
 
-    # -- one turn --------------------------------------------------------------- #
     async def stream(self, choice: str, ctx: llm.ChatContext) -> AsyncIterator[tuple[str, llm.ChatChunk]]:
         """Yield (model name, chunk) for one reply, falling back on errors.
 
@@ -107,7 +96,7 @@ class ModelChains:
         the token cap, wrong format). Once Hindi has started, nothing is retried: switching
         would make the voice repeat the sentence.
         """
-        from .prompts import ReplyParser  # local: prompts.py is pure, no import cycle
+        from .prompts import ReplyParser
 
         order = self.order_for(choice)
         candidates = [n for n in order if n not in self.busy] or order  # all busy: try anyway
@@ -115,7 +104,7 @@ class ModelChains:
         for name in candidates:
             held: list[llm.ChatChunk] = []  # header chunks, not yet passed on
             reply = ReplyParser()
-            live = False  # True once the Hindi line (or a skip) has started: no switching after
+            live = False  # Hindi (or a skip) has started: no switching after this
             try:
                 async with self.models[name].chat(
                     chat_ctx=ctx,
@@ -149,8 +138,7 @@ class ModelChains:
             if not live:  # the reply ended before a Hindi line started
                 reply.flush()
                 if not (reply.skip or reply.hindi.strip()):
-                    # cut off (token cap) or wrong format: nothing was spoken, so the next model
-                    # can still translate this turn. Not a rate limit: the model stays available.
+                    # cut off or wrong format: nothing spoken yet, try the next model
                     logger.warning("model %s reply had no Hindi line (cut off / wrong format), "
                                    "trying the next one", name)
                     last_err = RuntimeError(f"{name}: reply without a Hindi line")
@@ -162,7 +150,6 @@ class ModelChains:
             return
         raise last_err or RuntimeError("no model answered")
 
-    # -- busy / recovery (A + B) ------------------------------------------------- #
     def _set_busy(self, name: str, err: BaseException) -> None:
         wait = min(wait_from_error(err) or DEFAULT_WAIT, MAX_WAIT)
         if name not in self.busy:

@@ -1,8 +1,4 @@
-"""Runs the real InterpreterAgent inside a text-only AgentSession with a fake LLM, plus
-unit tests for the streamed-reply parser. No API keys needed.
-
-Checks: what the LLM is sent (raw ASR text + context), that only the HINDI line reaches
-the voice / chat history, that skipped turns say nothing and stay out of the context."""
+"""Agent, reply parser, noise filter and model fallback tests (fake LLMs, no API keys)."""
 
 from __future__ import annotations
 
@@ -51,9 +47,6 @@ def _feed_all(chunks: list[str]) -> tuple[ReplyParser, str]:
     return p, out
 
 
-# --------------------------------------------------------------------------- #
-# agent in a text-only session
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.asyncio
@@ -73,7 +66,7 @@ async def test_agent_streams_only_hindi_and_carries_context():
 
         await session.run(user_input="Uh, please join the google meat.")
         sent = _last_user(fake.prompts[0])
-        assert "ASR TEXT: Uh, please join the google meat." in sent  # raw text, no regex clean-up
+        assert "ASR TEXT: Uh, please join the google meat." in sent  # raw ASR text
         assert "TONE SETTING: auto" in sent
         assert "CONTEXT" not in sent
 
@@ -110,9 +103,6 @@ def test_split_history_skips_unanswered_turns():
     assert pairs == [("Hello", "नमस्ते")]
 
 
-# --------------------------------------------------------------------------- #
-# ReplyParser
-# --------------------------------------------------------------------------- #
 
 
 def test_parser_splits_header_across_chunks():
@@ -147,9 +137,6 @@ def test_parser_falls_back_to_plain_hindi():
     assert p.action == "translate" and out == "क्या हम मीटिंग कल कर सकते हैं?"
 
 
-# --------------------------------------------------------------------------- #
-# Whisper confidence filter (translator/stt.py)
-# --------------------------------------------------------------------------- #
 
 from types import SimpleNamespace  # noqa: E402
 
@@ -174,9 +161,6 @@ def test_keep_segment(seg, kept):
     assert keep_segment(seg, no_speech=0.6, min_logprob=-1.0, max_compression=2.4) is kept
 
 
-# --------------------------------------------------------------------------- #
-# Model fallback (rate limit on the first model -> the next one answers)
-# --------------------------------------------------------------------------- #
 
 from livekit.agents import APIStatusError  # noqa: E402
 
@@ -272,7 +256,6 @@ async def _collect(chains, choice="auto"):
 
 @pytest.mark.asyncio
 async def test_cut_off_reply_without_hindi_moves_to_the_next_model():
-    # like gpt-oss hitting the token cap inside the EN line
     cut = FakeLLM([["ACTION: translate\nEN: I am 15% sure that"]])
     ok = FakeLLM([["ACTION: translate\nEN: Yes.\nHINDI: हाँ।"]])
     chains = ModelChains({"gpt-oss-120b": cut, "gemini": ok})

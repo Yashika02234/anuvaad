@@ -10,8 +10,7 @@ const MODELS = [
   { v: "gemini", label: "Gemini Flash", button: "Gemini Flash", hint: "Google, lower free limits" },
 ];
 
-/** Translation model. Auto shows the model answering right now; a pinned model is tried
- *  first and the others take over when it's busy. */
+/** Translation model picker. Auto shows the model answering right now. */
 export default function ModelMenu({ value, onChange, active }) {
   const options = MODELS.map((m) => (m.v === "auto"
     ? { ...m, button: active ? `Auto · ${SHORT[active] || active}` : "Model · Auto" }

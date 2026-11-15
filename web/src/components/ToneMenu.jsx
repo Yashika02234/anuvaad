@@ -6,8 +6,7 @@ const TONE_OPTIONS = [
   { v: "casual", label: "Casual · तुम", button: "Casual · तुम", hint: "Friendly: friends and peers" },
 ];
 
-/** Styled replacement for a native <select> (whose popup can't be styled).
- *  Used for the tone and the model menus (same look, different options). */
+/** Styled dropdown used for the tone and model menus. */
 export default function ToneMenu({ value, onChange, options = TONE_OPTIONS, id = "tone", title = "Hindi politeness level", label = "Tone", className = "tone" }) {
   const OPTIONS = options;
   const [open, setOpen] = useState(false);

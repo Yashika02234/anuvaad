@@ -1,14 +1,7 @@
-"""Groq Whisper with a noise filter based on Whisper's own confidence.
+"""Groq Whisper that drops segments Whisper itself marks as noise.
 
-LiveKit's Groq STT asks for the plain "json" format (text only), so every transcript,
-noise included, reaches the LLM. This subclass asks for "verbose_json", which gives
-per-segment confidence, and drops segments Whisper itself flags as non-speech:
-
-    no_speech_prob > STT_NO_SPEECH_PROB  and  avg_logprob < STT_MIN_LOGPROB   (silence / noise)
-    compression_ratio > STT_MAX_COMPRESSION                                  (looped junk: "Me. Me. Me.")
-
-(the same rules Whisper uses internally). If nothing is left, the transcript is empty and
-LiveKit ignores it: no turn, no preemptive LLM call, no Groq tokens spent.
+Uses the verbose_json format for per-segment confidence. If nothing is left, the
+transcript is empty and LiveKit ignores the turn.
 """
 
 from __future__ import annotations
@@ -18,7 +11,7 @@ import math
 
 import openai
 
-try:  # this livekit/openai stack ships httpx as "httpx2" (same import the plugin uses)
+try:  # this livekit/openai stack ships httpx as "httpx2"
     import httpx2 as httpx
 except ImportError:  # pragma: no cover
     import httpx
@@ -87,16 +80,15 @@ class ConfidentGroqSTT(groq.STT):
         if segments:
             kept = [s for s in segments
                     if keep_segment(s, self._no_speech, self._min_logprob, self._max_compression)]
-            for s in segments:  # every segment is logged, so thresholds can be tuned from real sessions
+            for s in segments:
                 logger.info(
                     "whisper %s %r (no_speech=%.2f logprob=%.2f compression=%.2f)",
                     "KEPT" if s in kept else "DROPPED", s.text.strip(),
                     s.no_speech_prob, s.avg_logprob, s.compression_ratio,
                 )
             text = " ".join(s.text.strip() for s in kept).strip()
-            # LiveKit tracks a confidence per transcript: use Whisper's average word probability
             conf = math.exp(sum(s.avg_logprob for s in kept) / len(kept)) if kept else 0.0
-        else:  # no segment info (shouldn't happen with verbose_json): keep the text as is
+        else:  # no segment info: keep the text as is
             text, conf = (resp.text or "").strip(), 1.0
 
         return stt.SpeechEvent(

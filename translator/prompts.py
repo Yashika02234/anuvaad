@@ -1,15 +1,9 @@
-"""The one prompt that does everything, and the parser for its streamed reply.
+"""The translation prompt and the parser for its streamed reply.
 
-The raw speech-to-text turn goes straight to the LLM. The LLM decides skip / translate,
-cleans the English, picks the tone and writes the Hindi exactly as it should be SPOKEN.
-There is no regex pre/post-processing and no glossary (old version: dump/).
-
-Reply format (three lines):
+Reply format:
     ACTION: translate | skip
     EN: <cleaned English>
-    HINDI: <spoken Hindi>     <- only this line is streamed to the voice
-
-Pure Python, no LiveKit imports: scripts/prompt_lab.py uses the same prompt.
+    HINDI: <spoken Hindi>     <- only this line is spoken
 """
 
 from __future__ import annotations
@@ -199,9 +193,6 @@ def build_user_prompt(
     return "\n".join(lines)
 
 
-# --------------------------------------------------------------------------- #
-# Streaming reply parser
-# --------------------------------------------------------------------------- #
 
 _DEVANAGARI = re.compile(r"[ऀ-ॿ]")
 _QUOTES = " \t\"'“”‘’"
@@ -266,7 +257,6 @@ class ReplyParser:
         self._done = True
         return out
 
-    # -- internals ---------------------------------------------------------- #
     def _header_line(self, line: str, complete: bool) -> str:
         key, sep, val = line.partition(":")
         k = key.strip().upper()

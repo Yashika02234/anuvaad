@@ -1,12 +1,5 @@
-// The realtime engine behind the UI. Everything heavy runs in the LiveKit agent; this:
-//  - publishes the mic over WebRTC (echo cancellation on, so Hindi playback isn't re-heard)
-//  - collects live English transcripts + the cleaned sentence the LLM actually translated
-//  - collects streaming Hindi text, plays Hindi audio, and records each Hindi clip so it
-//    stays "ready to play" (per line + whole-session download)
-//  - sends the UI settings (Hands-free / Hold to talk, tone) to the agent over RPC
-//
-// It is plain JavaScript with a tiny subscribe/getSnapshot store, so React reads it with
-// useSyncExternalStore and the realtime code stays independent of rendering.
+// Realtime engine behind the UI: mic, transcripts, Hindi playback/recording, settings RPC.
+// A small subscribe/getSnapshot store that React reads with useSyncExternalStore.
 
 import { Room, RoomEvent, Track } from "livekit-client";
 import { HindiRecorder, download, micMeter } from "./audio";
@@ -25,13 +18,9 @@ export const ORB = {
 
 const norm = (t) => (t || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
-// Free-tier pacing (frontend estimate only). The translator's LLM runs on a free plan that
-// fits about 2 sentences a minute; every turn the agent reports (translated or skipped)
-// is one LLM call. The page can't see the real rate-limit error, so it infers a failed
-// call: the agent went thinking -> listening without speaking and didn't report a skip.
+// Free-tier pacing hints. Each reported turn (translated or skipped) is one LLM call.
 const PACE = {
   windowMs: 60_000,
-  // with automatic model fallback there is roughly 3x the room of one free-plan model
   hintAt: 6, // calls in the last minute: gentle tip
   warnAt: 9, // calls in the last minute: "slow down"
   failGraceMs: 1200, // wait this long for a late "dropped" event before calling it a failure
@@ -83,7 +72,6 @@ export class Interpreter {
     this.emit();
   }
 
-  // ---------------------------------------------------------------- store ---
   subscribe = (fn) => { this.listeners.add(fn); return () => this.listeners.delete(fn); };
   getSnapshot = () => this.snap;
   onLevel = (fn) => { this.levelListeners.add(fn); return () => this.levelListeners.delete(fn); };
@@ -112,7 +100,6 @@ export class Interpreter {
     this.listeners.forEach((fn) => fn());
   }
 
-  // ----------------------------------------------------------------- rows ---
   newRow() {
     const row = { id: this.nextId++, state: "listening", raw: "", rawLive: true, clean: "", en: "", hi: "",
                   same: false, enChips: [], hiChips: [], metrics: null, clip: null };
@@ -122,7 +109,6 @@ export class Interpreter {
   unanswered() { return this.rows.filter((r) => r.state === "listening" || r.state === "held"); }
   chip(row, side, text, cls = "") { row[side === "en" ? "enChips" : "hiChips"].push({ text, cls }); }
 
-  // -------------------------------------------------- free-tier pacing ---
   /** Show a notice above the mic for a while. A "warn" is never replaced by an "info". */
   showNotice([kind, text, ms]) {
     if (this.notice?.kind === "warn" && kind === "info") return;
@@ -155,7 +141,6 @@ export class Interpreter {
     if (failed) this.showNotice(NOTICE.failed);
   }
 
-  // ------------------------------------------------------- transcriptions ---
   onTranscription = async (reader, { identity }) => {
     const attrs = reader.info.attributes || {};
     const segId = attrs["lk.segment_id"] || reader.info.id;
@@ -194,7 +179,6 @@ export class Interpreter {
     this.emit();
   };
 
-  // ------------------------------------------------------ pipeline events ---
   onEvent = (ev) => {
     this.held = ev.type === "held"; // any other event ends the "waiting for the rest" state
     if (ev.type === "held") {
@@ -213,9 +197,7 @@ export class Interpreter {
       }
     } else if (ev.type === "turn") {
       this.noteCall();
-      // merge any held fragments into one row: that's the sentence we translate
-      // (a row still "translating" with no Hindi yet was announced by a preemptive run
-      //  that got replaced: reuse it instead of leaving a stuck row)
+      // merge pending rows (and a stale row still waiting for Hindi) into one
       const pending = [...this.unanswered(), ...this.rows.filter((r) => r.state === "translating" && !r.hi)];
       const row = pending[0] || this.newRow();
       const merged = new Set(pending.slice(1));
@@ -246,7 +228,6 @@ export class Interpreter {
     this.refreshOrb(true);
   };
 
-  // ------------------------------------------------------------ audio ---
   onAgentAudio(track) {
     const el = track.attach();
     el.autoplay = true;
@@ -265,8 +246,7 @@ export class Interpreter {
         .filter((r) => ["listening", "held", "translating"].includes(r.state) && (r.raw || r.en).trim() && !r.hi)
         .map((r) => r.id);
     } else if (prev === "thinking" && state === "listening") {
-      // thought, but never spoke: either a skip (a "dropped" event is on its way) or a failed
-      // LLM call, e.g. the free plan's rate limit. Give the skip event a moment to arrive.
+      // thought but never spoke: a skip (event may still arrive) or a failed call
       const ids = this.thinkingRowIds;
       this.thinkingRowIds = [];
       setTimeout(() => { this.checkUnanswered(ids); this.emit(); }, PACE.failGraceMs);
@@ -287,7 +267,6 @@ export class Interpreter {
     this.refreshOrb(true);
   }
 
-  // ------------------------------------------------------------ mic state ---
   computeOrb() {
     if (!this.room) return this.connecting ? "connecting" : "idle";
     if (!this.agentIdentity) return this.connecting ? "connecting" : "waiting";
@@ -307,7 +286,6 @@ export class Interpreter {
     if (force || s !== this.orbState) { this.orbState = s; this.emit(); }
   }
 
-  // ------------------------------------------------------------- session ---
   async rpc(method, payload = "") {
     if (!this.room || !this.agentIdentity) return undefined;
     try {
@@ -389,7 +367,6 @@ export class Interpreter {
     if (this.inputMode !== "auto") await this.rpc("set_input_mode", this.inputMode);
   }
 
-  // ------------------------------------------------------------ controls ---
   setVoice = (on) => {
     this.voiceOn = on;
     this.audioEls.forEach((el) => { el.muted = !on; });
@@ -402,7 +379,6 @@ export class Interpreter {
     this.model = model;
     this.emit();
     const applied = await this.rpc("set_model", model);
-    // the agent answers with the model it uses (e.g. "auto" if this one isn't configured)
     if (applied && applied !== this.model) { this.model = applied; this.emit(); }
   };
 

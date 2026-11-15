@@ -1,14 +1,4 @@
-"""LiveKit voice agent: English speech in -> Hindi speech out.
-
-    mic --WebRTC--> [Silero VAD + turn detector] -> [STT: Whisper/Sarvam]
-        -> llm_node   ONE LLM call per turn: skip or translate, clean-up, tone, and
-                      the Hindi written the way it is spoken (prompts.SYSTEM_PROMPT)
-        -> [Hindi TTS] --WebRTC--> speaker
-
-The LLM replies with three lines (ACTION / EN / HINDI); only the HINDI line is streamed
-to the voice. Half sentences are left to LiveKit's turn detector; if one still gets
-through, the LLM translates it as a fragment and completes it on the next turn
-(the fragment is in CONTEXT). The earlier regex pipeline is kept in dump/.
+"""LiveKit voice agent: English speech in, Hindi speech out.
 
 Run:  python -m translator.agent dev
 """
@@ -59,16 +49,10 @@ class ControlState:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-# --------------------------------------------------------------------------- #
-# helpers (pure, unit-tested)
-# --------------------------------------------------------------------------- #
 
 
 def split_history(messages: list[llm.ChatMessage]) -> tuple[str, list[tuple[str, str]]]:
-    """Return (latest user text, previous (user, assistant) pairs) from the chat history.
-
-    Only user messages that actually got a translation are paired, so skipped turns
-    (fillers, noise) don't pollute the context."""
+    """Return (latest user text, previous (user, assistant) pairs); skipped turns are left out."""
     last_user = ""
     last_user_idx = -1
     for i in range(len(messages) - 1, -1, -1):
@@ -96,9 +80,6 @@ def build_translation_ctx(user_text: str, tone: str, context: list[tuple[str, st
     return ctx
 
 
-# --------------------------------------------------------------------------- #
-# The agent
-# --------------------------------------------------------------------------- #
 
 
 class InterpreterAgent(Agent):
@@ -108,14 +89,12 @@ class InterpreterAgent(Agent):
     ):
         super().__init__(instructions=SYSTEM_PROMPT)
         self.state = state
-        # the models with automatic fallback; None = the session's own LLM (tests)
-        self.chains = chains
+        self.chains = chains  # None = use the session's own LLM (tests)
         self.settings = settings
         self.room = room
         self._cleaned: dict[str, str] = {}  # raw ASR text -> the LLM's cleaned English
         self._announced: str | None = None  # last raw text the UI was told about
 
-    # ---- UI events ------------------------------------------------------- #
     async def emit(self, payload: dict[str, Any]) -> None:
         if self.room is None:
             return
@@ -132,8 +111,7 @@ class InterpreterAgent(Agent):
         self, turn_key: str, raw: str, reply: ReplyParser, model: str | None = None,
         fallback: bool = False,
     ) -> None:
-        """Tell the web page what happened to this turn (once per turn: preemptive
-        generation can run llm_node twice for the same turn)."""
+        """Tell the web page what happened to this turn (once per turn)."""
         if self._announced == turn_key:
             return
         self._announced = turn_key
@@ -148,12 +126,9 @@ class InterpreterAgent(Agent):
             event["fallback"] = fallback  # True: the first-choice model was busy
         await self.emit(event)
 
-    # ---- clean + translate in one LLM call ------------------------------ #
     async def llm_node(
         self, chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings
     ) -> AsyncIterable[str]:
-        # Stateless on purpose: everything is derived from chat_ctx, so LiveKit's
-        # preemptive generation and interruptions can't leave us in a stale state.
         messages = chat_ctx.messages()
         user_text, pairs = split_history(messages)
         if not user_text.strip():
@@ -190,8 +165,7 @@ class InterpreterAgent(Agent):
             logger.warning("LLM reply had no Hindi line for %r", user_text)
 
     async def _generate(self, ctx: llm.ChatContext, model_settings: ModelSettings, info: dict):
-        """Stream the reply from the fallback chain (or the session LLM when there are no
-        chains). `info` is filled with the model that answered as soon as it starts."""
+        """Stream the reply from the model chain; `info` gets the model that answered."""
         if self.chains is None:
             async for chunk in Agent.default.llm_node(self, ctx, [], model_settings):
                 yield chunk
@@ -206,9 +180,6 @@ class InterpreterAgent(Agent):
             yield chunk
 
 
-# --------------------------------------------------------------------------- #
-# Worker / session wiring
-# --------------------------------------------------------------------------- #
 
 
 def prewarm(proc: JobProcess) -> None:
@@ -229,11 +200,7 @@ server = AgentServer(setup_fnc=prewarm, http_proxy=_livekit_http_proxy())
 def _turn_detector(settings: Settings):
     if settings.turn_detector != "vad":
         try:
-            # LiveKit's end-of-turn model: predicts "is the speaker done?", so it waits
-            # longer after "move the meeting to..." than after "...tomorrow?".
-            # Runs on LiveKit Cloud with the project keys; falls back to a local model.
-            # (Replaces the deprecated livekit-plugins-turn-detector, whose inference
-            # worker returned no result on Windows.)
+            # LiveKit's end-of-turn model: waits longer when the sentence sounds unfinished
             return inference.TurnDetector()
         except Exception:
             logger.warning("turn detector unavailable -> using VAD silence only", exc_info=True)
@@ -244,8 +211,8 @@ def _turn_detector(settings: Settings):
 async def entrypoint(ctx: JobContext) -> None:
     s = SETTINGS
     state = ControlState()
-    chains = build_model_chains(s)  # all translation models, with automatic fallback
-    ctx.add_shutdown_callback(chains.aclose)  # stop pending recovery checks
+    chains = build_model_chains(s)
+    ctx.add_shutdown_callback(chains.aclose)
     detector = _turn_detector(s)
 
     session: AgentSession = AgentSession(
@@ -263,23 +230,19 @@ async def entrypoint(ctx: JobContext) -> None:
                 "resume_false_interruption": True,  # noise, not words -> resume Hindi
                 "false_interruption_timeout": 1.0,
             },
-            # off: preemptive runs fired an LLM call per transcript piece (+ retries), several
-            # ~2.8k-token calls per sentence, which blew Groq's free-tier tokens/minute limit
-            "preemptive_generation": {"enabled": False},
+            "preemptive_generation": {"enabled": False},  # one LLM call per finished turn
         },
         use_tts_aligned_transcript=False,  # show the LLM text, not the TTS text
     )
 
     agent = InterpreterAgent(state, s, ctx.room, chains)
 
-    # a model hit its limit (or came back): tell the web page
     def _model_status(name: str, available: bool) -> None:
         logger.info("model %s %s", name, "available again" if available else "unavailable")
         asyncio.create_task(agent.emit({"type": "model_status", "model": name, "available": available}))
 
     chains.on_change(_model_status)
 
-    # ---- latency metrics -> console + UI --------------------------------- #
     @session.on("conversation_item_added")
     def _on_item(ev) -> None:
         item = ev.item
@@ -313,7 +276,6 @@ async def entrypoint(ctx: JobContext) -> None:
 
     await session.start(agent=agent, room=ctx.room)
 
-    # ---- RPCs from the web UI -------------------------------------------- #
     lp = ctx.room.local_participant
 
     @lp.register_rpc_method("set_tone")
@@ -324,7 +286,6 @@ async def entrypoint(ctx: JobContext) -> None:
 
     @lp.register_rpc_method("set_model")
     async def _set_model(data: rtc.RpcInvocationData) -> str:
-        # "auto" (fallback order) or a model name to try first; unknown names are ignored
         if data.payload in chains.names:
             state.model = data.payload
         return state.model

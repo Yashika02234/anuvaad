@@ -5,7 +5,7 @@ const cx = (...c) => c.filter(Boolean).join(" ");
 const ms = (v) => (v == null ? "–" : `${Math.round(v * 1000)} ms`);
 
 function Latency({ m }) {
-  if (m.e2e == null) return null; // very short replies aren't timed: show nothing rather than "–"
+  if (m.e2e == null) return null; // very short replies aren't timed
   return (
     <span className="lat" title={`ASR ${ms(m.stt)} · Translate ${ms(m.llm_ttft)} · TTS ${ms(m.tts_ttfb)}`}>
       <b className={m.e2e > 2.5 ? "slow" : ""}>{m.e2e.toFixed(2)}s</b> latency
@@ -42,8 +42,7 @@ function Row({ row }) {
 }
 
 export default function Conversation({ rows }) {
-  // keep the newest line in view: scroll to the page bottom, whose padding keeps it above the
-  // mic (scrolling the row itself to the screen edge would put it behind the mic)
+  // keep the newest line in view, above the mic
   useEffect(() => {
     window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
   }, [rows.length]);

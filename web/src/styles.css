@@ -26,13 +26,13 @@ body {
   color: var(--ink); font: 15px/1.55 var(--ui);
   -webkit-font-smoothing: antialiased;
 }
-/* React mounts into #root: let it fill the page so the conversation can sit above the mic */
+/* #root fills the page */
 #root { flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
 button, select, input { font: inherit; color: inherit; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 ::selection { background: var(--sage-soft); }
 
-/* ---------- buttons ---------- */
+/* buttons */
 button {
   border: 1px solid var(--line-2); background: transparent; border-radius: 999px;
   padding: 7px 16px; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--ink);
@@ -47,7 +47,7 @@ button.primary:hover { background: var(--burgundy-2); border-color: var(--burgun
 button.end { color: var(--burgundy); border-color: var(--burgundy); }
 button.end:hover { background: rgba(90, 10, 7, .06); }
 
-/* ---------- header ---------- */
+/* header */
 .top {
   position: sticky; top: 0; z-index: 10; background: var(--bg);
   display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: center; justify-content: space-between;
@@ -57,14 +57,14 @@ button.end:hover { background: rgba(90, 10, 7, .06); }
 .brand-a { margin-right: 1px; font: 700 28px/1 var(--hi); color: var(--burgundy); }
 .controls { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
 .top-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-/* small rounded buttons (header actions) */
+/* header action buttons */
 button.pill { display: inline-flex; align-items: center; gap: 7px; padding: 6px 14px; font-size: 12.5px; background: var(--surface); border-color: var(--line); }
 button.pill:hover { border-color: var(--line-2); }
 button.pill svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 button.pill[aria-pressed="false"] { color: var(--muted); }
 button.pill.end { color: var(--burgundy); border-color: var(--burgundy); background: transparent; }
 
-/* talk mode: segmented pill, the active option is a raised white pill */
+/* talk mode switch */
 .seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--sage-soft); }
 .seg button {
   border: 0; border-radius: 999px; padding: 5px 14px; background: transparent; color: var(--muted); font-size: 12.5px;
@@ -73,7 +73,7 @@ button.pill.end { color: var(--burgundy); border-color: var(--burgundy); backgro
 .seg button:hover { color: var(--ink); border: 0; }
 .seg button.on { color: var(--ink); background: var(--surface); box-shadow: 0 1px 2px rgba(29, 42, 30, .12); }
 
-/* tone menu: text button + a small cream popover */
+/* dropdown menus (tone, model) */
 .tone { position: relative; }
 .tone-btn {
   display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 0; padding: 6px 0;
@@ -103,14 +103,14 @@ button.pill.end { color: var(--burgundy); border-color: var(--burgundy); backgro
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5 10 17 19 7'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
-/* ---------- page ---------- */
+/* page */
 .layout { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1180px; margin: 0 auto; padding: 0 56px; }
-/* the conversation sits just above the mic and grows upwards, like live captions */
+/* conversation grows upwards above the mic */
 .rows { flex: 1; display: flex; flex-direction: column; padding: 8px 0 250px; }
 .rows:has(.row) { justify-content: flex-end; }
 
-/* ---------- empty state ---------- */
+/* empty state */
 .empty { padding: 7vh 0 0; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 64px; align-items: start; }
 .tries-title { margin: 0 0 6px; font-size: 10.5px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--burgundy); opacity: .75; }
 .badge { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 18px; font-size: 12px; color: var(--burgundy); }
@@ -130,11 +130,11 @@ main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1
 .info-note svg { flex: none; width: 15px; height: 15px; margin-top: 2px; fill: none; stroke: var(--burgundy); stroke-width: 2; stroke-linecap: round; }
 .rows > .info-note { margin-top: 4px; }
 
-/* ---------- conversation ---------- */
+/* conversation */
 .row { max-width: 920px; padding: 18px 0; animation: rise .45s cubic-bezier(.2, .8, .2, 1); }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
 
-/* older lines: smaller, faded, no controls; a hairline separates them from the newest */
+/* older lines: smaller and faded */
 .rows > .row:not(:last-of-type) { padding: 12px 0 18px; border-bottom: 1px solid var(--line); transition: opacity .3s; }
 .rows > .row:not(:last-of-type) .en .raw, .rows > .row:not(:last-of-type) .en .clean { font-size: 13px; color: var(--faded); }
 .rows > .row:not(:last-of-type) .hi .text { font-size: 19px; color: var(--sage-2); margin-top: 4px; }
@@ -167,7 +167,7 @@ main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1
 .row.dropped .hi, .row.dropped .en .clean { display: none; }
 .row.dropped .en .raw { display: inline; text-decoration: line-through; text-decoration-color: var(--line-2); }
 .row.dropped .meta { display: inline-flex; margin: 0 0 0 10px; vertical-align: middle; }
-/* the translator never answered (likely the free plan's rate limit): keep the English, flag it */
+/* line with no translation */
 .row.failed .hi { display: none; }
 .rows > .row.failed .meta { display: flex; }
 
@@ -185,13 +185,13 @@ main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1
 .lat b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .lat b.slow { color: var(--warn); }
 
-/* ---------- mic dock ---------- */
+/* mic dock */
 .orb-dock {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
   display: flex; flex-direction: column; align-items: center; gap: 6px;
   padding: 36px 16px max(22px, env(safe-area-inset-bottom));
   background: linear-gradient(to top, var(--bg) 68%, rgba(236, 237, 222, 0));
-  pointer-events: none; /* the faded strip doesn't block the page; its controls do */
+  pointer-events: none; /* only the controls take clicks */
 }
 .orb-dock > * { pointer-events: auto; }
 .dock-row { position: relative; display: flex; align-items: center; gap: 22px; }
@@ -216,7 +216,7 @@ main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1
 .orb svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 .orb .ic-spk, .orb .ic-stop, .orb[data-state="speaking"] .ic-mic { display: none; }
 .orb[data-state="speaking"] .ic-spk { display: block; }
-/* hands-free session: the mic also ends the session; hovering shows a stop square */
+/* hands-free: hovering the mic shows a stop square */
 .orb.can-end { cursor: pointer; }
 .orb.can-end .ic-stop { fill: currentColor; stroke: none; width: 18px; height: 18px; }
 @media (hover: hover) {
@@ -226,7 +226,7 @@ main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1
 }
 .orb-hint { font-size: 11px; color: var(--muted); opacity: .75; }
 
-/* free-tier pacing notice above the mic */
+/* notice above the mic */
 .notice {
   max-width: min(520px, calc(100vw - 32px)); margin-bottom: 4px; padding: 8px 14px; border-radius: 12px;
   font-size: 12.5px; line-height: 1.4; text-align: center; background: var(--sage-soft); color: var(--ink-2);
@@ -235,7 +235,7 @@ main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1
 .notice.warn { background: #fff; border: 1px solid var(--warn); color: var(--warn); }
 
 .orb-label[hidden] { display: none; }
-/* controls under the mic: talk mode · tone · model (menus open upwards) */
+/* controls under the mic (menus open upwards) */
 .dock-controls { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px; margin-top: 6px; }
 .dock-controls .tone-btn { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 12.5px; }
 .dock-controls .tone-btn:hover { border: 1px solid var(--line-2); color: var(--ink); }
@@ -286,8 +286,8 @@ main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1
   .empty { grid-template-columns: minmax(0, 1fr); gap: 28px; padding-top: 3vh; }
   .hi .text { font-size: 26px; }
   .rows > .row:not(:last-of-type) .hi .text { font-size: 17px; }
-  .rows { padding-bottom: 295px; } /* the controls wrap onto two lines here */
-  /* examples: horizontal cards that snap, the next one peeking in from the right */
+  .rows { padding-bottom: 295px; }
+  /* example cards carousel */
   .tries {
     display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none;
     margin-right: -18px; padding: 2px 18px 4px 0;
@@ -302,7 +302,7 @@ main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1
   .tries-dots button.on { width: 18px; background: var(--ink-2); }
   .rows > .info-note { display: none; }
 
-  /* controls: talk switch full width, then tone + model as two equal buttons */
+  /* full-width talk switch, then tone + model side by side */
   .dock-controls {
     position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
     width: 100%; max-width: 420px;
@@ -322,13 +322,13 @@ main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1
   button.pill { padding: 6px 11px; }
 }
 
-/* short screens (phone in landscape): smaller mic so the conversation stays visible */
+/* short screens (phone landscape) */
 @media (max-height: 560px) {
   .halo { width: 70px; height: 70px; }
   .orb { width: 50px; height: 50px; }
   .orb-dock { padding-top: 20px; gap: 4px; }
   .rows { padding-bottom: 200px; }
   .empty { padding-top: 2vh; }
-  .top { position: static; }           /* header scrolls away: every pixel of height counts */
-  .rows > .info-note { display: none; } /* the start screen already explains this */
+  .top { position: static; }
+  .rows > .info-note { display: none; }
 }

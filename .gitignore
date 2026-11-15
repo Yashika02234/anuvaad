@@ -9,10 +9,8 @@ out/
 web/node_modules/
 web/dist/
 
-# local logs and Vercel link folder
 *.log
 .vercel/
 
-# parked regex-era files (kept locally, not part of the repo)
 dump/
-"scripts/prompt_lab.py" 
+scripts/prompt_lab.py

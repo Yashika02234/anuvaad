@@ -1,7 +1,4 @@
-// Audio helpers: mic level meter + recording the Hindi the page plays as WAV clips.
-//
-// MediaRecorder on a remote WebRTC track is unreliable (empty / unplayable webm
-// clips), so we tap the raw PCM the page is already playing and write plain WAV.
+// Audio helpers: mic level meter + recording the played Hindi as WAV clips (raw PCM tap).
 
 export const CLIP_SR = 24000;
 
@@ -76,8 +73,7 @@ export class HindiRecorder {
     tap.onaudioprocess = (e) => {
       const chunk = resample(e.inputBuffer.getChannelData(0), ctx.sampleRate);
       if (this.recording) { this.clip.push(chunk); return; }
-      // pre-roll: the "speaking" signal arrives a moment after the audio starts, so keep
-      // the last ~0.6 s to prepend; otherwise the replay clip loses its first word
+      // keep ~0.6 s of pre-roll so the clip doesn't lose its first word
       this.preroll.push(chunk);
       while (this.preroll.length > 7) this.preroll.shift(); // 4096 samples ≈ 85 ms each
     };
