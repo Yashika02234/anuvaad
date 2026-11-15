@@ -31,14 +31,19 @@ const norm = (t) => (t || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").tri
 // call: the agent went thinking -> listening without speaking and didn't report a skip.
 const PACE = {
   windowMs: 60_000,
-  hintAt: 2, // calls in the last minute: gentle tip
-  warnAt: 3, // calls in the last minute: "slow down"
+  // with automatic model fallback there is roughly 3x the room of one free-plan model
+  hintAt: 6, // calls in the last minute: gentle tip
+  warnAt: 9, // calls in the last minute: "slow down"
   failGraceMs: 1200, // wait this long for a late "dropped" event before calling it a failure
 };
+const MODEL_NAMES = { qwen: "Qwen", "gpt-oss-20b": "gpt-oss 20B", "gpt-oss-120b": "gpt-oss 120B", gemini: "Gemini" };
+const modelName = (m) => MODEL_NAMES[m] || m;
 const NOTICE = {
-  hint: ["info", "Tip: pause a little between sentences. The free plan handles about 2 a minute.", 6000],
-  warn: (n) => ["warn", `Slow down a little: ${n} sentences in the last minute. The free plan handles about 2 a minute.`, 8000],
-  failed: ["warn", "The translator didn't respond. You may be speaking faster than the free plan allows (about 2 sentences a minute). Pause a few seconds, then try again.", 10000],
+  hint: ["info", "Tip: pause a little between sentences. The translators run on free plans with per-minute limits.", 6000],
+  warn: (n) => ["warn", `Slow down a little: ${n} sentences in the last minute. The free plans may start refusing.`, 8000],
+  failed: ["warn", "The translator didn't respond. All models may be busy (free-plan limits). Pause a few seconds, then try again.", 10000],
+  busy: (m) => ["info", `${modelName(m)} is busy (free-plan limit). The next model takes over.`, 6000],
+  back: (m) => ["info", `${modelName(m)} is available again.`, 4000],
 };
 
 export class Interpreter {
@@ -48,6 +53,10 @@ export class Interpreter {
     this.agentState = null;
     this.inputMode = "auto";
     this.tone = "auto";
+    this.voiceOn = true; // Hindi playback (off = read the screen only)
+    this.audioEls = [];
+    this.model = "auto"; // auto = the agent's fallback order, or a model to try first
+    this.activeModel = null; // the model that translated the latest line
     this.rows = []; // {id, segId, hiSegId, state, raw, rawLive, clean, en, hi, same, enChips, hiChips, metrics, clip}
     this.nextId = 1;
     this.clipRowId = null; // row whose Hindi is currently being spoken (gets the recorded clip)
@@ -93,6 +102,9 @@ export class Interpreter {
       connecting: this.connecting,
       inputMode: this.inputMode,
       tone: this.tone,
+      model: this.model,
+      activeModel: this.activeModel,
+      voiceOn: this.voiceOn,
       hasTranscript: this.hasTranscript,
       hasAudio: this.hasAudio,
       notice: this.notice,
@@ -217,10 +229,14 @@ export class Interpreter {
       row.enChips = [];
       if (ev.forced) this.chip(row, "en", "speaker paused mid-sentence: translated anyway", "grey");
       if (ev.tone) this.chip(row, "en", ev.tone === "casual" ? "casual · तुम" : "formal · आप"); // only when forced
+      if (ev.model) this.activeModel = ev.model;
+      if (ev.fallback && ev.model && this.model !== "auto") this.chip(row, "en", `via ${modelName(ev.model)} (first choice busy)`, "grey");
       ev.asr_fixes?.forEach((f) => this.chip(row, "en", `heard: ${f}`));
       ev.fillers?.forEach((f) => this.chip(row, "en", `removed “${f}”`, "grey"));
       ev.entities?.forEach((e) => this.chip(row, "en", `kept: ${e}`));
       ev.hints?.forEach((h) => this.chip(row, "en", h));
+    } else if (ev.type === "model_status") {
+      this.showNotice(ev.available ? NOTICE.back(ev.model) : NOTICE.busy(ev.model));
     } else if (ev.type === "metrics") {
       const row = [...this.rows].reverse().find((r) => r.hiSegId && !r.metrics) || this.rows.at(-1);
       if (!row) return;
@@ -234,6 +250,8 @@ export class Interpreter {
   onAgentAudio(track) {
     const el = track.attach();
     el.autoplay = true;
+    el.muted = !this.voiceOn;
+    this.audioEls.push(el);
     document.body.appendChild(el);
     if (!this.recorder) this.recorder = new HindiRecorder(this.ctx, new MediaStream([track.mediaStreamTrack]));
   }
@@ -367,11 +385,26 @@ export class Interpreter {
     this.refreshOrb(true);
     // push the current UI settings to the agent
     await this.rpc("set_tone", this.tone);
+    await this.rpc("set_model", this.model);
     if (this.inputMode !== "auto") await this.rpc("set_input_mode", this.inputMode);
   }
 
   // ------------------------------------------------------------ controls ---
+  setVoice = (on) => {
+    this.voiceOn = on;
+    this.audioEls.forEach((el) => { el.muted = !on; });
+    this.emit();
+  };
+
   setTone = (tone) => { this.tone = tone; this.emit(); this.rpc("set_tone", tone); };
+
+  setModel = async (model) => {
+    this.model = model;
+    this.emit();
+    const applied = await this.rpc("set_model", model);
+    // the agent answers with the model it uses (e.g. "auto" if this one isn't configured)
+    if (applied && applied !== this.model) { this.model = applied; this.emit(); }
+  };
 
   setInputMode = (mode) => { this.inputMode = mode; this.refreshOrb(true); this.rpc("set_input_mode", mode); };
 
