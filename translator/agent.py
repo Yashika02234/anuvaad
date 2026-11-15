@@ -1,9 +1,14 @@
 """LiveKit voice agent: English speech in -> Hindi speech out.
 
     mic --WebRTC--> [Silero VAD + turn detector] -> [STT: Whisper/Sarvam]
-        -> on_user_turn_completed  (drop fillers-only / hold half sentences)
-        -> llm_node                (clean + translate, entity masking, context)
-        -> tts_node                (numbers -> Hindi words) -> [Hindi TTS] --WebRTC--> speaker
+        -> llm_node   ONE LLM call per turn: skip or translate, clean-up, tone, and
+                      the Hindi written the way it is spoken (prompts.SYSTEM_PROMPT)
+        -> [Hindi TTS] --WebRTC--> speaker
+
+The LLM replies with three lines (ACTION / EN / HINDI); only the HINDI line is streamed
+to the voice. Half sentences are left to LiveKit's turn detector; if one still gets
+through, the LLM translates it as a fragment and completes it on the next turn
+(the fragment is in CONTEXT). The earlier regex pipeline is kept in dump/.
 
 Run:  python -m translator.agent dev
 """
@@ -27,7 +32,6 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     ModelSettings,
-    StopResponse,
     cli,
     llm,
 )
@@ -36,28 +40,18 @@ from livekit.agents.types import NOT_GIVEN
 from livekit.plugins import silero
 
 from .config import SETTINGS, Settings, make_llm, make_stt, make_tts
-from .prompts import FEW_SHOT, SYSTEM_PROMPT, build_user_message
-from .text_processing import (
-    Glossary,
-    PreparedTurn,
-    StreamingTTSNormalizer,
-    StreamingUnmasker,
-    prepare_turn,
-)
+from .prompts import SYSTEM_PROMPT, ReplyParser, build_user_prompt
 
 logger = logging.getLogger("translator")
 
-
-
 TOPIC_EVENTS = "translator.events"  # data-channel topic the web UI listens to
-CONTEXT_PAIRS = 2  # how many previous (EN, HI) pairs the LLM sees
+CONTEXT_PAIRS = 2  # how many previous (EN, HINDI) pairs the LLM sees
 
 
 @dataclass
 class ControlState:
     """Things the web UI can change live over RPC."""
 
-    glossary: Glossary
     tone_mode: str = "auto"  # auto | formal | casual
     input_mode: str = "auto"  # auto (always listening, VAD) | ptt (push-to-talk)
     extra: dict[str, Any] = field(default_factory=dict)
@@ -71,8 +65,8 @@ class ControlState:
 def split_history(messages: list[llm.ChatMessage]) -> tuple[str, list[tuple[str, str]]]:
     """Return (latest user text, previous (user, assistant) pairs) from the chat history.
 
-    Only user messages that actually got a translation are paired, so utterances that
-    were dropped or held back don't pollute the context."""
+    Only user messages that actually got a translation are paired, so skipped turns
+    (fillers, noise) don't pollute the context."""
     last_user = ""
     last_user_idx = -1
     for i in range(len(messages) - 1, -1, -1):
@@ -93,28 +87,11 @@ def split_history(messages: list[llm.ChatMessage]) -> tuple[str, list[tuple[str,
     return last_user, pairs
 
 
-def build_translation_ctx(turn: PreparedTurn, context: list[tuple[str, str]]) -> llm.ChatContext:
+def build_translation_ctx(user_text: str, tone: str, context: list[tuple[str, str]]) -> llm.ChatContext:
     ctx = llm.ChatContext.empty()
     ctx.add_message(role="system", content=SYSTEM_PROMPT)
-    for u, a in FEW_SHOT:
-        ctx.add_message(role="user", content=u)
-        ctx.add_message(role="assistant", content=a)
-    ctx.add_message(role="user", content=build_user_message(turn, context))
+    ctx.add_message(role="user", content=build_user_prompt(user_text, tone, context))
     return ctx
-
-
-def turn_event(turn: PreparedTurn, **extra: Any) -> dict[str, Any]:
-    return {
-        "type": "turn",
-        "raw": turn.raw,
-        "cleaned": turn.cleaned,
-        "tone": turn.tone,
-        "entities": list(turn.entities.values()),
-        "hints": [f"{en} → {hi}" for en, hi in turn.hints],
-        "fillers": turn.removed_fillers,
-        "asr_fixes": turn.asr_fixes,
-        **extra,
-    }
 
 
 # --------------------------------------------------------------------------- #
@@ -123,16 +100,18 @@ def turn_event(turn: PreparedTurn, **extra: Any) -> dict[str, Any]:
 
 
 class InterpreterAgent(Agent):
-    def __init__(self, state: ControlState, settings: Settings, room: rtc.Room):
+    def __init__(self, state: ControlState, settings: Settings, room: rtc.Room | None):
         super().__init__(instructions=SYSTEM_PROMPT)
         self.state = state
         self.settings = settings
         self.room = room
-        self._held_text = ""
-        self._hold_task: asyncio.Task | None = None
+        self._cleaned: dict[str, str] = {}  # raw ASR text -> the LLM's cleaned English
+        self._announced: str | None = None  # last raw text the UI was told about
 
     # ---- UI events ------------------------------------------------------- #
     async def emit(self, payload: dict[str, Any]) -> None:
+        if self.room is None:
+            return
         try:
             await self.room.local_participant.publish_data(
                 json.dumps(payload, ensure_ascii=False).encode(),
@@ -142,77 +121,36 @@ class InterpreterAgent(Agent):
         except Exception:  # UI events must never break the audio pipeline
             logger.debug("publish_data failed", exc_info=True)
 
-    def _prev_user_texts(self) -> list[str]:
-        _, pairs = split_history(self.session.history.messages())
-        return [u for u, _ in pairs]
+    async def _announce(self, turn_key: str, raw: str, reply: ReplyParser) -> None:
+        """Tell the web page what happened to this turn (once per turn: preemptive
+        generation can run llm_node twice for the same turn)."""
+        if self._announced == turn_key:
+            return
+        self._announced = turn_key
+        if reply.skip:
+            await self.emit({"type": "dropped", "raw": raw, "reason": "nothing to translate"})
+            return
+        event: dict[str, Any] = {"type": "turn", "raw": raw, "cleaned": reply.en or raw}
+        if self.state.tone_mode in ("formal", "casual"):
+            event["tone"] = self.state.tone_mode
+        await self.emit(event)
 
-    # ---- stage 2.5: gate the finished user turn --------------------------- #
-    async def on_user_turn_completed(
-        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
-    ) -> None:
-        raw = new_message.text_content or ""
-        if self._hold_task:
-            self._hold_task.cancel()
-            self._hold_task = None
-        text = f"{self._held_text} {raw}".strip() if self._held_text else raw
-        self._held_text = ""
-
-        turn = prepare_turn(text, self.state.glossary, self.state.tone_mode, self._prev_user_texts())
-
-        if turn.skip:
-            # only fillers ("uh, um") or a Whisper hallucination on noise: say nothing
-            await self.emit(
-                {"type": "dropped", "raw": raw, "fillers": turn.removed_fillers, "reason": turn.skip_reason}
-            )
-            raise StopResponse()
-
-        if turn.incomplete and self.state.input_mode == "auto":
-            # "Can we move the meeting to..." -> wait briefly for the rest of the sentence
-            self._held_text = text
-            self._hold_task = asyncio.create_task(self._flush_held_after_timeout())
-            await self.emit({"type": "held", "text": turn.cleaned})
-            raise StopResponse()
-
-        # make the chat history hold the merged utterance that we actually translate
-        new_message.content = [text]
-        await self.emit(turn_event(turn, id=new_message.id))
-
-    async def _flush_held_after_timeout(self) -> None:
-        """The speaker really stopped mid-sentence: translate what we have anyway."""
-        try:
-            await asyncio.sleep(self.settings.incomplete_hold_s)
-            while self.session.user_state == "speaking":  # they continued: the next turn merges
-                await asyncio.sleep(0.1)
-            text, self._held_text = self._held_text, ""
-            self._hold_task = None
-            if not text:
-                return
-            turn = prepare_turn(text, self.state.glossary, self.state.tone_mode, self._prev_user_texts())
-            await self.emit(turn_event(turn, forced=True))
-            self.session.generate_reply(user_input=text)
-        except asyncio.CancelledError:
-            pass
-
-    # ---- stage 3: clean + translate --------------------------------------- #
+    # ---- clean + translate in one LLM call ------------------------------ #
     async def llm_node(
         self, chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings
     ) -> AsyncIterable[str]:
         # Stateless on purpose: everything is derived from chat_ctx, so LiveKit's
         # preemptive generation and interruptions can't leave us in a stale state.
-        user_text, pairs = split_history(chat_ctx.messages())
+        messages = chat_ctx.messages()
+        user_text, pairs = split_history(messages)
         if not user_text.strip():
             return
-        prev = [u for u, _ in pairs]
-        turn = prepare_turn(user_text, self.state.glossary, self.state.tone_mode, prev)
-        context = [
-            (prepare_turn(u, self.state.glossary).cleaned, h) for u, h in pairs[-CONTEXT_PAIRS:]
-        ]
-        ctx = build_translation_ctx(turn, context)
+        # same turn number + same text = same turn (a repeated sentence is a new turn)
+        turn_key = f"{sum(m.role == 'user' for m in messages)}:{user_text}"
+        context = [(self._cleaned.get(u, u), h) for u, h in pairs[-CONTEXT_PAIRS:]]
+        ctx = build_translation_ctx(user_text, self.state.tone_mode, context)
 
-        unmasker = StreamingUnmasker(turn.entities)
-        quotes = " \n\"'“”"  # some models wrap the answer in quotes: strip them
-        started = False
-        held = ""  # trailing quote/space chars, released only if more text follows
+        reply = ReplyParser()
         async for chunk in Agent.default.llm_node(self, ctx, [], model_settings):
             if isinstance(chunk, str):
                 delta = chunk
@@ -223,36 +161,19 @@ class InterpreterAgent(Agent):
                 continue
             if not delta:
                 continue
-            out = unmasker.feed(delta)
-            if not started:
-                out = out.lstrip(quotes)
-                started = bool(out)
-            out = held + out
-            body = out.rstrip(quotes)
-            held = out[len(body):]
-            if body:
-                yield body
-        tail = (held + unmasker.flush()).rstrip(quotes)
-        if tail.strip(quotes):
+            out = reply.feed(delta)
+            if reply.header_done:
+                await self._announce(turn_key, user_text, reply)
+            if out:
+                yield out
+        tail = reply.flush()
+        await self._announce(turn_key, user_text, reply)
+        if reply.en and reply.en != "-":
+            self._cleaned[user_text] = reply.en
+        if tail:
             yield tail
-
-    # ---- stage 4: speech -------------------------------------------------- #
-    async def tts_node(self, text: AsyncIterable[str], model_settings: ModelSettings):
-        # The transcript keeps "शाम 5:30 बजे", "₹500", "HR"; only the AUDIO gets the spoken
-        # Hindi form ("शाम साढ़े पाँच बजे", "पाँच सौ रुपये", "एचआर"), otherwise the voice
-        # reads digits/symbols/acronyms the English way.
-        async def verbalized() -> AsyncIterable[str]:
-            v = StreamingTTSNormalizer(self.state.glossary.pronunciations)
-            async for chunk in text:
-                out = v.feed(chunk)
-                if out:
-                    yield out
-            tail = v.flush()
-            if tail:
-                yield tail
-
-        async for frame in Agent.default.tts_node(self, verbalized(), model_settings):
-            yield frame
+        if not reply.skip and not reply.hindi.strip():
+            logger.warning("LLM reply had no Hindi line for %r", user_text)
 
 
 # --------------------------------------------------------------------------- #
@@ -292,12 +213,12 @@ def _turn_detector(settings: Settings):
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     s = SETTINGS
-    state = ControlState(glossary=Glossary.load(s.glossary_path))
+    state = ControlState()
     detector = _turn_detector(s)
 
     session: AgentSession = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        stt=make_stt(s, state.glossary.stt_prompt()),
+        stt=make_stt(s),
         llm=make_llm(s),
         tts=make_tts(s),
         turn_handling={
@@ -310,9 +231,11 @@ async def entrypoint(ctx: JobContext) -> None:
                 "resume_false_interruption": True,  # noise, not words -> resume Hindi
                 "false_interruption_timeout": 1.0,
             },
-            "preemptive_generation": {"enabled": True},  # start translating before EOU is final
+            # off: preemptive runs fired an LLM call per transcript piece (+ retries), several
+            # ~2.8k-token calls per sentence, which blew Groq's free-tier tokens/minute limit
+            "preemptive_generation": {"enabled": False},
         },
-        use_tts_aligned_transcript=False,  # show the LLM text (digits), not the TTS text
+        use_tts_aligned_transcript=False,  # show the LLM text, not the TTS text
     )
 
     agent = InterpreterAgent(state, s, ctx.room)
@@ -384,15 +307,6 @@ async def entrypoint(ctx: JobContext) -> None:
         session.input.set_audio_enabled(False)
         session.commit_user_turn(transcript_timeout=5.0)
         return "ok"
-
-    @lp.register_rpc_method("add_terms")
-    async def _add_terms(data: rtc.RpcInvocationData) -> str:
-        state.glossary.add_entities([t for t in data.payload.split(",") if t.strip()])
-        try:  # refresh the STT vocabulary hint too
-            agent.update_options(stt=make_stt(s, state.glossary.stt_prompt()))
-        except Exception:
-            logger.warning("could not refresh STT vocabulary", exc_info=True)
-        return json.dumps(state.glossary.entities, ensure_ascii=False)
 
 
 if __name__ == "__main__":

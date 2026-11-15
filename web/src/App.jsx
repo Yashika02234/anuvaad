@@ -16,7 +16,8 @@ export default function App() {
           </div>
         </main>
       </div>
-      <MicDock orb={s.orb} inputMode={s.inputMode} hasTranscript={s.hasTranscript} hasAudio={s.hasAudio} />
+      <MicDock orb={s.orb} connected={s.connected} inputMode={s.inputMode} hasTranscript={s.hasTranscript} hasAudio={s.hasAudio}
+               notice={s.notice} />
     </>
   );
 }

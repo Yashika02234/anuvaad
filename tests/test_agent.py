@@ -1,11 +1,10 @@
-"""Runs the real InterpreterAgent inside a text-only AgentSession with a fake LLM.
+"""Runs the real InterpreterAgent inside a text-only AgentSession with a fake LLM, plus
+unit tests for the streamed-reply parser. No API keys needed.
 
-Checks the LiveKit wiring without any API keys: what the LLM is sent, that entity
-tokens are restored in the streamed output, and that context is carried over."""
+Checks: what the LLM is sent (raw ASR text + context), that only the HINDI line reaches
+the voice / chat history, that skipped turns say nothing and stay out of the context."""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 from livekit.agents import AgentSession, llm
@@ -13,13 +12,11 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from translator.agent import ControlState, InterpreterAgent, split_history
 from translator.config import Settings
-from translator.text_processing import Glossary
-
-G_PATH = Path(__file__).resolve().parent.parent / "glossary.json"
+from translator.prompts import ReplyParser
 
 
 class FakeLLM(llm.LLM):
-    """Returns canned chunks (deliberately splitting [[1]] across chunks) and records prompts."""
+    """Returns canned chunks (deliberately splitting the header lines) and records prompts."""
 
     def __init__(self, replies: list[list[str]]):
         super().__init__()
@@ -48,45 +45,130 @@ def _last_user(ctx: llm.ChatContext) -> str:
     return [m for m in ctx.messages() if m.role == "user"][-1].text_content
 
 
+def _feed_all(chunks: list[str]) -> tuple[ReplyParser, str]:
+    p = ReplyParser()
+    out = "".join(p.feed(c) for c in chunks) + p.flush()
+    return p, out
+
+
+# --------------------------------------------------------------------------- #
+# agent in a text-only session
+# --------------------------------------------------------------------------- #
+
+
 @pytest.mark.asyncio
-async def test_agent_translates_with_entities_and_context():
+async def test_agent_streams_only_hindi_and_carries_context():
     fake = FakeLLM(
         [
-            ["\"कृपया [", "[1]] पर ", "आइए।\""],
-            ["क्या हम मीटिंग को कल शाम 5 बजे कर सकते हैं?"],
+            ["ACTION: tran", "slate\nEN: Please join the Google Meet.\nHIN", "DI: \"कृपया Google Meet पर ", "आइए।\""],
+            ["ACTION: skip\nEN: -\nHINDI: -"],
+            ["ACTION: translate\nEN: Can we move the meeting to\nHINDI: क्या हम मीटिंग को…"],
+            ["ACTION: translate\nEN: 5 PM tomorrow?\nHINDI: कल शाम पाँच बजे कर सकते हैं?"],
         ]
     )
-    state = ControlState(glossary=Glossary.load(G_PATH))
-    agent = InterpreterAgent(state, Settings(), room=None)  # room=None: UI events are skipped
+    agent = InterpreterAgent(ControlState(), Settings(), room=None)  # room=None: no UI events
 
     async with AgentSession(llm=fake) as session:
         await session.start(agent)
 
-        r1 = await session.run(user_input="Uh, please join the google meat.")
-        r1.expect.contains_message(role="assistant")
+        await session.run(user_input="Uh, please join the google meat.")
         sent = _last_user(fake.prompts[0])
-        assert "ENGLISH: Please join the [[1]]." in sent
-        assert "PROTECTED: [[1]] = Google Meet" in sent
-        assert "uh" not in sent.lower().split("english:")[1]
+        assert "ASR TEXT: Uh, please join the google meat." in sent  # raw text, no regex clean-up
+        assert "TONE SETTING: auto" in sent
+        assert "CONTEXT" not in sent
 
-        r2 = await session.run(user_input="Can we move the meeting to 5 PM tomorrow?")
-        sent2 = _last_user(fake.prompts[1])
-        assert '"5 PM" -> "शाम 5 बजे"' in sent2
-        assert "EN: Please join the Google Meet." in sent2  # previous turn as context
-        assert "HI: कृपया Google Meet पर आइए।" in sent2  # unmasked + quotes stripped
+        await session.run(user_input="Um, uh.")  # skipped: nothing spoken
+
+        await session.run(user_input="Can we move the meeting to")
+        sent3 = _last_user(fake.prompts[2])
+        assert "EN: Please join the Google Meet." in sent3  # the LLM's cleaned English as context
+        assert "HINDI: कृपया Google Meet पर आइए।" in sent3  # quotes stripped
+        assert "Um, uh." not in sent3  # skipped turn is not context
+
+        await session.run(user_input="5 PM tomorrow?")
+        sent4 = _last_user(fake.prompts[3])
+        assert "EN: Can we move the meeting to\n  HINDI: क्या हम मीटिंग को…" in sent4  # fragment -> continuation
 
     texts = [m.text_content for m in session.history.messages() if m.role == "assistant"]
-    assert texts[0] == "कृपया Google Meet पर आइए।"
-    assert texts[1] == "क्या हम मीटिंग को कल शाम 5 बजे कर सकते हैं?"
+    spoken = [t for t in texts if t and t.strip()]
+    assert spoken == [
+        "कृपया Google Meet पर आइए।",
+        "क्या हम मीटिंग को…",
+        "कल शाम पाँच बजे कर सकते हैं?",
+    ]
 
 
 def test_split_history_skips_unanswered_turns():
     ctx = llm.ChatContext.empty()
     ctx.add_message(role="system", content="sys")
-    ctx.add_message(role="user", content="uh")  # dropped, never answered
+    ctx.add_message(role="user", content="uh")  # skipped, never answered
     ctx.add_message(role="user", content="Hello")
     ctx.add_message(role="assistant", content="नमस्ते")
     ctx.add_message(role="user", content="How are you?")
     last, pairs = split_history(ctx.messages())
     assert last == "How are you?"
     assert pairs == [("Hello", "नमस्ते")]
+
+
+# --------------------------------------------------------------------------- #
+# ReplyParser
+# --------------------------------------------------------------------------- #
+
+
+def test_parser_splits_header_across_chunks():
+    p, out = _feed_all(["ACT", "ION: translate\nE", "N: Hi there.\nHINDI:", " नमस्ते", " दोस्त।"])
+    assert (p.action, p.en, out) == ("translate", "Hi there.", "नमस्ते दोस्त।")
+
+
+def test_parser_streams_hindi_before_the_reply_ends():
+    p = ReplyParser()
+    assert p.feed("ACTION: translate\nEN: Hello.\nHINDI: नमस्") == "नमस्"  # released at once
+    assert p.header_done
+    assert p.feed("ते।") == "ते।"
+
+
+def test_parser_skip_says_nothing():
+    p, out = _feed_all(["ACTION: skip\nEN: -\nHINDI: -"])
+    assert p.skip and out == ""
+
+
+def test_parser_strips_quotes_and_ignores_extra_lines():
+    p, out = _feed_all(["ACTION: translate\nEN: Yes.\nHINDI: “हाँ।”\nNote: done"])
+    assert out == "हाँ।"
+
+
+def test_parser_dash_alone_is_not_spoken():
+    p, out = _feed_all(["ACTION: translate\nEN: -\nHINDI: -\n"])
+    assert out == ""
+
+
+def test_parser_falls_back_to_plain_hindi():
+    p, out = _feed_all(["क्या हम मीटिंग कल कर सकते हैं?"])
+    assert p.action == "translate" and out == "क्या हम मीटिंग कल कर सकते हैं?"
+
+
+# --------------------------------------------------------------------------- #
+# Whisper confidence filter (translator/stt.py)
+# --------------------------------------------------------------------------- #
+
+from types import SimpleNamespace  # noqa: E402
+
+from translator.stt import keep_segment  # noqa: E402
+
+
+def _seg(no_speech=0.0, logprob=-0.2, compression=1.0):
+    return SimpleNamespace(no_speech_prob=no_speech, avg_logprob=logprob, compression_ratio=compression)
+
+
+@pytest.mark.parametrize(
+    "seg, kept",
+    [
+        (_seg(), True),  # clear speech
+        (_seg(no_speech=0.9, logprob=-1.5), False),  # Whisper's own silence rule
+        (_seg(no_speech=0.9, logprob=-0.3), True),  # "no speech" but confident words: keep
+        (_seg(no_speech=0.1, logprob=-1.5), True),  # unsure words but clearly speech: keep
+        (_seg(compression=3.1), False),  # repetition loop "Me. Me. Me. Me."
+    ],
+)
+def test_keep_segment(seg, kept):
+    assert keep_segment(seg, no_speech=0.6, min_logprob=-1.0, max_compression=2.4) is kept

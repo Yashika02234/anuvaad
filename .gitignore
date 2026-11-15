@@ -8,3 +8,7 @@ __pycache__/
 out/
 web/node_modules/
 web/dist/
+
+# local logs and Vercel link folder
+*.log
+.vercel/

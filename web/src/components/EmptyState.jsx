@@ -13,7 +13,7 @@ export default function EmptyState({ connected, inputMode }) {
     ? <>Tap the <b>mic</b> (or <b>Start session</b>), allow the microphone, and try one of these:</>
     : inputMode === "ptt"
       ? <><b>Hold the mic</b> (or Space) and say one of these in English:</>
-      : <><b>Just speak</b>, say one of these in English, then pause:</>;
+      : <><b>Just speak</b>, say one of these in English, then pause. Tap the <b>mic</b> again to end:</>;
 
   return (
     <section className="empty" id="empty">

@@ -23,7 +23,7 @@ function Chips({ list, side }) {
 
 function Row({ row }) {
   return (
-    <div className={cx("row", row.state === "dropped" && "dropped", row.same && "same")}>
+    <div className={cx("row", row.state === "dropped" && "dropped", row.state === "failed" && "failed", row.same && "same")}>
       <div className="en">
         <div className={cx("raw", row.rawLive && "live")}>{row.raw}</div>
         <div className="clean">{row.clean}</div>

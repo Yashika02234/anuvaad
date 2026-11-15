@@ -13,7 +13,6 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 USER app
 ENV HOME=/home/app
 COPY --chown=app translator ./translator
-COPY --chown=app glossary.json .
 
 # bake the VAD / end-of-sentence model files into the image
 RUN python -m translator.agent download-files

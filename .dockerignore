@@ -10,3 +10,7 @@ docs/
 web/
 tests/
 scripts/
+
+# parked regex-era files and local test output: not part of the agent image
+dump/
+out/

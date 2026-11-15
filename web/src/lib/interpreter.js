@@ -25,6 +25,22 @@ export const ORB = {
 
 const norm = (t) => (t || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
+// Free-tier pacing (frontend estimate only). The translator's LLM runs on a free plan that
+// fits about 2 sentences a minute; every turn the agent reports (translated or skipped)
+// is one LLM call. The page can't see the real rate-limit error, so it infers a failed
+// call: the agent went thinking -> listening without speaking and didn't report a skip.
+const PACE = {
+  windowMs: 60_000,
+  hintAt: 2, // calls in the last minute: gentle tip
+  warnAt: 3, // calls in the last minute: "slow down"
+  failGraceMs: 1200, // wait this long for a late "dropped" event before calling it a failure
+};
+const NOTICE = {
+  hint: ["info", "Tip: pause a little between sentences. The free plan handles about 2 a minute.", 6000],
+  warn: (n) => ["warn", `Slow down a little: ${n} sentences in the last minute. The free plan handles about 2 a minute.`, 8000],
+  failed: ["warn", "The translator didn't respond. You may be speaking faster than the free plan allows (about 2 sentences a minute). Pause a few seconds, then try again.", 10000],
+};
+
 export class Interpreter {
   constructor() {
     this.room = null;
@@ -47,6 +63,10 @@ export class Interpreter {
     this.ctx = null;
     this.recorder = null;
     this.stopMeter = null;
+    this.llmCalls = []; // timestamps of turns the agent reported (each one = one LLM call)
+    this.thinkingRowIds = []; // rows waiting for a translation when the agent started thinking
+    this.notice = null; // {kind: "info" | "warn", text} shown above the mic
+    this.noticeTimer = null;
 
     this.listeners = new Set();
     this.levelListeners = new Set();
@@ -75,6 +95,7 @@ export class Interpreter {
       tone: this.tone,
       hasTranscript: this.hasTranscript,
       hasAudio: this.hasAudio,
+      notice: this.notice,
     };
     this.listeners.forEach((fn) => fn());
   }
@@ -88,6 +109,39 @@ export class Interpreter {
   }
   unanswered() { return this.rows.filter((r) => r.state === "listening" || r.state === "held"); }
   chip(row, side, text, cls = "") { row[side === "en" ? "enChips" : "hiChips"].push({ text, cls }); }
+
+  // -------------------------------------------------- free-tier pacing ---
+  /** Show a notice above the mic for a while. A "warn" is never replaced by an "info". */
+  showNotice([kind, text, ms]) {
+    if (this.notice?.kind === "warn" && kind === "info") return;
+    clearTimeout(this.noticeTimer);
+    this.notice = { kind, text };
+    this.noticeTimer = setTimeout(() => { this.notice = null; this.emit(); }, ms);
+    this.emit();
+  }
+
+  /** One LLM call happened (a turn was translated or skipped): check the pace. */
+  noteCall() {
+    const now = Date.now();
+    this.llmCalls = this.llmCalls.filter((t) => now - t < PACE.windowMs);
+    this.llmCalls.push(now);
+    const n = this.llmCalls.length;
+    if (n >= PACE.warnAt) this.showNotice(NOTICE.warn(n));
+    else if (n === PACE.hintAt) this.showNotice(NOTICE.hint);
+  }
+
+  /** Rows the agent thought about but never answered (no Hindi, no skip): mark them failed. */
+  checkUnanswered(ids) {
+    let failed = 0;
+    for (const row of this.rows) {
+      if (!ids.includes(row.id) || row.hi.trim() || ["done", "dropped", "failed"].includes(row.state)) continue;
+      row.state = "failed";
+      row.rawLive = false;
+      this.chip(row, "en", "⚠ not translated: translator busy?", "warn");
+      failed++;
+    }
+    if (failed) this.showNotice(NOTICE.failed);
+  }
 
   // ------------------------------------------------------- transcriptions ---
   onTranscription = async (reader, { identity }) => {
@@ -113,7 +167,7 @@ export class Interpreter {
     // agent (Hindi) transcript: streams in sync with the audio
     let row = this.rows.find((r) => r.hiSegId === segId) ||
               this.rows.find((r) => r.state === "translating" && !r.hiSegId) ||
-              [...this.rows].reverse().find((r) => r.state !== "dropped");
+              [...this.rows].reverse().find((r) => r.state !== "dropped" && r.state !== "failed");
     if (!row) row = this.newRow();
     row.hiSegId = segId;
     this.clipRowId = row.id;
@@ -135,6 +189,7 @@ export class Interpreter {
       const row = this.unanswered().at(-1);
       if (row) { row.state = "held"; this.chip(row, "en", "⏳ waiting for the rest of the sentence", "warn"); }
     } else if (ev.type === "dropped") {
+      this.noteCall();
       const row = this.unanswered().at(-1);
       const fillerOnly = ev.reason === "only fillers" && ev.fillers?.length;
       const why = fillerOnly ? `only fillers: ${ev.fillers.join(", ")}` : ev.reason || "noise / no speech";
@@ -145,8 +200,11 @@ export class Interpreter {
         this.chip(row, "en", why, "grey");
       }
     } else if (ev.type === "turn") {
+      this.noteCall();
       // merge any held fragments into one row: that's the sentence we translate
-      const pending = this.unanswered();
+      // (a row still "translating" with no Hindi yet was announced by a preemptive run
+      //  that got replaced: reuse it instead of leaving a stuck row)
+      const pending = [...this.unanswered(), ...this.rows.filter((r) => r.state === "translating" && !r.hi)];
       const row = pending[0] || this.newRow();
       const merged = new Set(pending.slice(1));
       this.rows = this.rows.filter((r) => !merged.has(r));
@@ -158,7 +216,7 @@ export class Interpreter {
       row.same = norm(ev.raw) === norm(ev.cleaned); // show the raw line only if cleaning changed it
       row.enChips = [];
       if (ev.forced) this.chip(row, "en", "speaker paused mid-sentence: translated anyway", "grey");
-      this.chip(row, "en", ev.tone === "casual" ? "casual · तुम" : "formal · आप");
+      if (ev.tone) this.chip(row, "en", ev.tone === "casual" ? "casual · तुम" : "formal · आप"); // only when forced
       ev.asr_fixes?.forEach((f) => this.chip(row, "en", `heard: ${f}`));
       ev.fillers?.forEach((f) => this.chip(row, "en", `removed “${f}”`, "grey"));
       ev.entities?.forEach((e) => this.chip(row, "en", `kept: ${e}`));
@@ -181,7 +239,20 @@ export class Interpreter {
   }
 
   onAgentState(state) {
+    const prev = this.agentState;
     this.agentState = state;
+    if (state === "thinking") {
+      // the sentence(s) the agent is now translating
+      this.thinkingRowIds = this.rows
+        .filter((r) => ["listening", "held", "translating"].includes(r.state) && (r.raw || r.en).trim() && !r.hi)
+        .map((r) => r.id);
+    } else if (prev === "thinking" && state === "listening") {
+      // thought, but never spoke: either a skip (a "dropped" event is on its way) or a failed
+      // LLM call, e.g. the free plan's rate limit. Give the skip event a moment to arrive.
+      const ids = this.thinkingRowIds;
+      this.thinkingRowIds = [];
+      setTimeout(() => { this.checkUnanswered(ids); this.emit(); }, PACE.failGraceMs);
+    }
     if (this.recorder) {
       if (state === "speaking") this.recorder.start();
       else {
