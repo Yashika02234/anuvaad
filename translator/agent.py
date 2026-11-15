@@ -39,7 +39,8 @@ from livekit.agents import inference
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins import silero
 
-from .config import SETTINGS, Settings, make_llm, make_stt, make_tts
+from .config import SETTINGS, Settings, build_model_chains, make_stt, make_tts
+from .models import ModelChains
 from .prompts import SYSTEM_PROMPT, ReplyParser, build_user_prompt
 
 logger = logging.getLogger("translator")
@@ -54,6 +55,7 @@ class ControlState:
 
     tone_mode: str = "auto"  # auto | formal | casual
     input_mode: str = "auto"  # auto (always listening, VAD) | ptt (push-to-talk)
+    model: str = "auto"  # auto (fallback order) | a model name pinned first (see ModelChains)
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -100,9 +102,14 @@ def build_translation_ctx(user_text: str, tone: str, context: list[tuple[str, st
 
 
 class InterpreterAgent(Agent):
-    def __init__(self, state: ControlState, settings: Settings, room: rtc.Room | None):
+    def __init__(
+        self, state: ControlState, settings: Settings, room: rtc.Room | None,
+        chains: ModelChains | None = None,
+    ):
         super().__init__(instructions=SYSTEM_PROMPT)
         self.state = state
+        # the models with automatic fallback; None = the session's own LLM (tests)
+        self.chains = chains
         self.settings = settings
         self.room = room
         self._cleaned: dict[str, str] = {}  # raw ASR text -> the LLM's cleaned English
@@ -121,7 +128,10 @@ class InterpreterAgent(Agent):
         except Exception:  # UI events must never break the audio pipeline
             logger.debug("publish_data failed", exc_info=True)
 
-    async def _announce(self, turn_key: str, raw: str, reply: ReplyParser) -> None:
+    async def _announce(
+        self, turn_key: str, raw: str, reply: ReplyParser, model: str | None = None,
+        fallback: bool = False,
+    ) -> None:
         """Tell the web page what happened to this turn (once per turn: preemptive
         generation can run llm_node twice for the same turn)."""
         if self._announced == turn_key:
@@ -133,6 +143,9 @@ class InterpreterAgent(Agent):
         event: dict[str, Any] = {"type": "turn", "raw": raw, "cleaned": reply.en or raw}
         if self.state.tone_mode in ("formal", "casual"):
             event["tone"] = self.state.tone_mode
+        if model:
+            event["model"] = model  # which model translated it
+            event["fallback"] = fallback  # True: the first-choice model was busy
         await self.emit(event)
 
     # ---- clean + translate in one LLM call ------------------------------ #
@@ -151,7 +164,8 @@ class InterpreterAgent(Agent):
         ctx = build_translation_ctx(user_text, self.state.tone_mode, context)
 
         reply = ReplyParser()
-        async for chunk in Agent.default.llm_node(self, ctx, [], model_settings):
+        info: dict[str, Any] = {}
+        async for chunk in self._generate(ctx, model_settings, info):
             if isinstance(chunk, str):
                 delta = chunk
             elif isinstance(chunk, llm.ChatChunk):
@@ -163,17 +177,33 @@ class InterpreterAgent(Agent):
                 continue
             out = reply.feed(delta)
             if reply.header_done:
-                await self._announce(turn_key, user_text, reply)
+                await self._announce(turn_key, user_text, reply, **info)
             if out:
                 yield out
         tail = reply.flush()
-        await self._announce(turn_key, user_text, reply)
+        await self._announce(turn_key, user_text, reply, **info)
         if reply.en and reply.en != "-":
             self._cleaned[user_text] = reply.en
         if tail:
             yield tail
         if not reply.skip and not reply.hindi.strip():
             logger.warning("LLM reply had no Hindi line for %r", user_text)
+
+    async def _generate(self, ctx: llm.ChatContext, model_settings: ModelSettings, info: dict):
+        """Stream the reply from the fallback chain (or the session LLM when there are no
+        chains). `info` is filled with the model that answered as soon as it starts."""
+        if self.chains is None:
+            async for chunk in Agent.default.llm_node(self, ctx, [], model_settings):
+                yield chunk
+            return
+        choice = self.state.model
+        async for name, chunk in self.chains.stream(choice, ctx):
+            if not info:
+                info.update(model=name, fallback=name != self.chains.primary(choice))
+                if info["fallback"]:
+                    logger.info("translated by fallback model %s (%s busy)", name,
+                                self.chains.primary(choice))
+            yield chunk
 
 
 # --------------------------------------------------------------------------- #
@@ -214,12 +244,14 @@ def _turn_detector(settings: Settings):
 async def entrypoint(ctx: JobContext) -> None:
     s = SETTINGS
     state = ControlState()
+    chains = build_model_chains(s)  # all translation models, with automatic fallback
+    ctx.add_shutdown_callback(chains.aclose)  # stop pending recovery checks
     detector = _turn_detector(s)
 
     session: AgentSession = AgentSession(
         vad=ctx.proc.userdata["vad"],
         stt=make_stt(s),
-        llm=make_llm(s),
+        llm=chains.models[chains.order[0]],  # translation itself goes through chains.stream
         tts=make_tts(s),
         turn_handling={
             "turn_detection": detector,
@@ -238,7 +270,14 @@ async def entrypoint(ctx: JobContext) -> None:
         use_tts_aligned_transcript=False,  # show the LLM text, not the TTS text
     )
 
-    agent = InterpreterAgent(state, s, ctx.room)
+    agent = InterpreterAgent(state, s, ctx.room, chains)
+
+    # a model hit its limit (or came back): tell the web page
+    def _model_status(name: str, available: bool) -> None:
+        logger.info("model %s %s", name, "available again" if available else "unavailable")
+        asyncio.create_task(agent.emit({"type": "model_status", "model": name, "available": available}))
+
+    chains.on_change(_model_status)
 
     # ---- latency metrics -> console + UI --------------------------------- #
     @session.on("conversation_item_added")
@@ -282,6 +321,13 @@ async def entrypoint(ctx: JobContext) -> None:
         if data.payload in ("auto", "formal", "casual"):
             state.tone_mode = data.payload
         return state.tone_mode
+
+    @lp.register_rpc_method("set_model")
+    async def _set_model(data: rtc.RpcInvocationData) -> str:
+        # "auto" (fallback order) or a model name to try first; unknown names are ignored
+        if data.payload in chains.names:
+            state.model = data.payload
+        return state.model
 
     @lp.register_rpc_method("set_input_mode")
     async def _set_input_mode(data: rtc.RpcInvocationData) -> str:

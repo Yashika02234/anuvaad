@@ -2,7 +2,7 @@
 
 Every stage is swappable with one env var, so you can run on free tiers:
     STT_PROVIDER = groq (Whisper, free tier) | sarvam (Indian-English model)
-    LLM_PROVIDER = groq (Qwen / gpt-oss, free tier) | gemini (free tier)
+    LLM_FALLBACK_ORDER = gpt-oss-120b,qwen,gpt-oss-20b,gemini  (first available model answers)
     TTS_PROVIDER = elevenlabs                | sarvam (Bulbul, Indian voices)
 """
 
@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
+from livekit.agents import llm
 
 # LiveKit plugins must be imported (registered) on the main thread at startup.
 # Importing them lazily inside a job crashes on Windows: "Plugins must be registered
@@ -34,10 +35,20 @@ class Settings:
     tts_provider: str = _env("TTS_PROVIDER", "elevenlabs").lower()
 
     groq_stt_model: str = _env("GROQ_STT_MODEL", "whisper-large-v3-turbo")
-    # Qwen with thinking off: 48/50 on the prompt-lab cases at ~0.5 s per reply
-    groq_llm_model: str = _env("GROQ_LLM_MODEL", "qwen/qwen3.8-27b")
+    # LLM fallback order (translator/models.py): when a model is busy (rate limit) or slow,
+    # the next one answers. Each provider/model has its own free-tier limits. A model picked
+    # in the web page moves to the front; the rest keep this order.
+    # gpt-oss-120b first, then Qwen (fastest, ~0.5 s per reply on Groq); Gemini last (~1.3 s,
+    # lower free limits)
+    llm_fallback_order: str = _env("LLM_FALLBACK_ORDER", "gpt-oss-120b,qwen,gpt-oss-20b,gemini")
     llm_max_tokens: int = int(_env("LLM_MAX_TOKENS", "200"))  # cap per reply (ACTION/EN/HINDI)
-    gemini_model: str = _env("GEMINI_MODEL", "")  # empty = LiveKit plugin default (a Flash model)
+    # gpt-oss always thinks a little ("low" is its minimum) and those tokens count against the
+    # cap: 200 cut long sentences off before the Hindi line (167 thinking + 33 answer tokens)
+    llm_max_tokens_reasoning: int = int(_env("LLM_MAX_TOKENS_REASONING", "300"))
+    # 3.5: works with minimal thinking (~1.2 s to first token). 3.8 rejects "minimal" (use
+    # GEMINI_THINKING_LEVEL=low) and was often overloaded (503/504) when tested.
+    gemini_model: str = _env("GEMINI_MODEL", "gemini-3.5-flash")
+    gemini_thinking_level: str = _env("GEMINI_THINKING_LEVEL", "minimal")
     eleven_voice_id: str = _env("ELEVEN_VOICE_ID", "")
     eleven_model: str = _env("ELEVEN_MODEL", "eleven_flash_v2_5")  # lowest-latency, speaks Hindi
     sarvam_speaker: str = _env("SARVAM_SPEAKER", "")
@@ -76,22 +87,47 @@ def make_stt(s: Settings):
     )
 
 
-def make_llm(s: Settings):
-    if s.llm_provider == "groq":
+# short name (used by the web page's model menu) -> Groq model id
+GROQ_MODELS = {
+    "qwen": "qwen/qwen3.8-27b",
+    "gpt-oss-20b": "openai/gpt-oss-20b",
+    "gpt-oss-120b": "openai/gpt-oss-120b",
+}
+
+
+def make_model(s: Settings, name: str) -> llm.LLM | None:
+    """One translation model, or None if it can't be used (unknown name / no API key)."""
+    if name in GROQ_MODELS:
+        model = GROQ_MODELS[name]
         # replies are ~40-100 tokens; without a cap the plugin asks for 2048, which Groq
         # reserves against the free tier's output-tokens-per-minute limit
-        kwargs = {"model": s.groq_llm_model, "temperature": 0.2,
-                  "max_completion_tokens": s.llm_max_tokens}
+        cap = s.llm_max_tokens_reasoning if "gpt-oss" in model else s.llm_max_tokens
+        kwargs = {"model": model, "temperature": 0.2, "max_completion_tokens": cap}
         # reasoning models: keep thinking minimal so the first Hindi token comes fast
-        if "gpt-oss" in s.groq_llm_model:
-            kwargs["reasoning_effort"] = "low"  # lowest gpt-oss allows
-        elif "qwen" in s.groq_llm_model:
-            kwargs["reasoning_effort"] = "none"  # Qwen can switch thinking off fully
+        kwargs["reasoning_effort"] = "none" if "qwen" in model else "low"  # gpt-oss minimum: low
         return groq.LLM(**kwargs)
-    kwargs = {"temperature": 0.2}
-    if s.gemini_model:
-        kwargs["model"] = s.gemini_model
-    return google.LLM(**kwargs)
+    if name == "gemini":
+        if not _env("GOOGLE_API_KEY"):
+            return None
+        return google.LLM(
+            model=s.gemini_model, temperature=0.2, max_output_tokens=s.llm_max_tokens,
+            thinking_config={"thinking_level": s.gemini_thinking_level},  # as low as the model allows
+        )
+    return None
+
+
+def build_model_chains(s: Settings):
+    """All usable translation models in LLM_FALLBACK_ORDER, with fallback + recovery."""
+    from .models import ModelChains
+
+    models = {}
+    for name in (n.strip() for n in s.llm_fallback_order.split(",")):
+        m = make_model(s, name) if name and name not in models else None
+        if m is not None:
+            models[name] = m
+    if not models:
+        raise ValueError(f"no usable LLM in LLM_FALLBACK_ORDER={s.llm_fallback_order!r}")
+    return ModelChains(models, groq_ids=GROQ_MODELS)
 
 
 def make_tts(s: Settings):
