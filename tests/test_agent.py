@@ -172,3 +172,126 @@ def _seg(no_speech=0.0, logprob=-0.2, compression=1.0):
 )
 def test_keep_segment(seg, kept):
     assert keep_segment(seg, no_speech=0.6, min_logprob=-1.0, max_compression=2.4) is kept
+
+
+# --------------------------------------------------------------------------- #
+# Model fallback (rate limit on the first model -> the next one answers)
+# --------------------------------------------------------------------------- #
+
+from livekit.agents import APIStatusError  # noqa: E402
+
+from translator.models import ModelChains, wait_from_error  # noqa: E402
+
+
+class RateLimitedLLM(llm.LLM):
+    """Always answers like Groq's free tier when the limit is reached."""
+
+    def chat(self, *, chat_ctx, tools=None, conn_options=DEFAULT_API_CONNECT_OPTIONS, **kw):
+        return _FailStream(self, chat_ctx=chat_ctx, tools=tools or [], conn_options=conn_options)
+
+
+class _FailStream(llm.LLMStream):
+    async def _run(self) -> None:
+        raise APIStatusError("Rate limit reached for model", status_code=429)
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_model_falls_back_to_the_next():
+    ok = FakeLLM([["ACTION: translate\nEN: Hello.\nHINDI: नमस्ते।"]])
+    chains = ModelChains({"qwen": RateLimitedLLM(), "gpt-oss-120b": ok})
+    agent = InterpreterAgent(ControlState(), Settings(), room=None, chains=chains)
+    sent: list[dict] = []
+
+    async def capture(payload):
+        sent.append(payload)
+
+    agent.emit = capture  # record the events the web page would get
+
+    async with AgentSession(llm=ok) as session:
+        await session.start(agent)
+        await session.run(user_input="Hello.")
+
+    spoken = [m.text_content for m in session.history.messages() if m.role == "assistant"]
+    assert spoken == ["नमस्ते।"]  # answered despite the 429
+    turn = next(e for e in sent if e["type"] == "turn")
+    assert turn["model"] == "gpt-oss-120b" and turn["fallback"] is True
+    assert chains.busy == {"qwen"}  # later turns skip it until the recovery check passes
+    await chains.aclose()
+
+
+def test_fallback_order_keeps_the_rest_in_place():
+    chains = ModelChains({n: FakeLLM([]) for n in ["qwen", "gpt-oss-120b", "gpt-oss-20b", "gemini"]})
+    assert chains.order_for("qwen") == ["qwen", "gpt-oss-120b", "gpt-oss-20b", "gemini"]
+    assert chains.order_for("gpt-oss-120b") == ["gpt-oss-120b", "qwen", "gpt-oss-20b", "gemini"]
+    assert chains.order_for("gemini") == ["gemini", "qwen", "gpt-oss-120b", "gpt-oss-20b"]
+
+
+@pytest.mark.parametrize("msg, wait", [
+    ("Rate limit reached ... Please try again in 19.937s. Need more tokens?", 19.937),
+    ("... tokens per day (TPD) ... Please try again in 7m48.288s.", 468.288),
+    ("RESOURCE_EXHAUSTED ... 'retryDelay': '30s'", 30.0),
+    ("some other error", None),
+])
+def test_wait_time_is_read_from_the_error(msg, wait):
+    got = wait_from_error(APIStatusError(msg, status_code=429))
+    assert (got is None and wait is None) or abs(got - wait) < 1e-6
+
+
+class _FailAfterStream(llm.LLMStream):
+    """Streams some chunks, then fails like a dropped connection."""
+
+    def __init__(self, fake, *, chunks, **kw):
+        super().__init__(fake, **kw)
+        self.chunks = chunks
+
+    async def _run(self) -> None:
+        for c in self.chunks:
+            self._event_ch.send_nowait(llm.ChatChunk(id="x", delta=llm.ChoiceDelta(role="assistant", content=c)))
+        raise APIStatusError("connection dropped", status_code=500)
+
+
+class FailAfterLLM(llm.LLM):
+    def __init__(self, chunks):
+        super().__init__()
+        self.chunks = chunks
+
+    def chat(self, *, chat_ctx, tools=None, conn_options=DEFAULT_API_CONNECT_OPTIONS, **kw):
+        return _FailAfterStream(self, chunks=self.chunks, chat_ctx=chat_ctx, tools=tools or [],
+                                conn_options=conn_options)
+
+
+async def _collect(chains, choice="auto"):
+    ctx = llm.ChatContext.empty()
+    ctx.add_message(role="user", content="x")
+    out, names = "", []
+    async for name, chunk in chains.stream(choice, ctx):
+        names.append(name)
+        out += chunk.delta.content if chunk.delta and chunk.delta.content else ""
+    return names, out
+
+
+@pytest.mark.asyncio
+async def test_cut_off_reply_without_hindi_moves_to_the_next_model():
+    # like gpt-oss hitting the token cap inside the EN line
+    cut = FakeLLM([["ACTION: translate\nEN: I am 15% sure that"]])
+    ok = FakeLLM([["ACTION: translate\nEN: Yes.\nHINDI: हाँ।"]])
+    chains = ModelChains({"gpt-oss-120b": cut, "gemini": ok})
+    names, out = await _collect(chains)
+    assert set(names) == {"gemini"}  # nothing from the cut-off reply was passed on
+    assert "HINDI: हाँ।" in out
+    assert chains.busy == set()  # cut off is not a rate limit: the model stays available
+
+
+@pytest.mark.asyncio
+async def test_failure_before_hindi_falls_back_but_after_hindi_does_not():
+    ok = FakeLLM([["ACTION: translate\nEN: Yes.\nHINDI: हाँ।"]])
+    early = FailAfterLLM(["ACTION: translate\nEN: Yes.\n"])  # dies before the Hindi line
+    chains = ModelChains({"qwen": early, "gemini": ok})
+    names, out = await _collect(chains)
+    assert set(names) == {"gemini"} and "हाँ" in out
+
+    late = FailAfterLLM(["ACTION: translate\nEN: Yes.\nHINDI: हाँ, "])  # dies mid-Hindi
+    chains2 = ModelChains({"qwen": late, "gemini": FakeLLM([["unused"]])})
+    with pytest.raises(APIStatusError):  # no switch: the voice already started speaking
+        await _collect(chains2)
+    await chains.aclose(); await chains2.aclose()
