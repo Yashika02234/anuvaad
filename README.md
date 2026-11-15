@@ -1,80 +1,259 @@
 # Anuvaad (अनुवाद): Live English → Hindi Voice Interpreter
 
-**Live demo:** [anuvaadx.vercel.app](https://anuvaadx.vercel.app). The access code is shared separately, so the API credits aren't open to everyone.
+**Live demo:** [anuvaadx.vercel.app](https://anuvaadx.vercel.app) (access code shared separately)
 
-Speak English and hear it in natural Hindi a moment later. Anuvaad listens to live speech, understands what was meant, translates it into everyday spoken Hindi, and speaks it out loud. It takes about **1.2–2 seconds** from the end of a sentence to the first Hindi audio.
+Speak English, hear natural spoken Hindi about **1.2–2 seconds** later. Anuvaad transcribes your speech, translates it with an LLM that writes Hindi the way it is *spoken*, and reads it out loud.
 
-![Anuvaad during a live session](docs/ui.png)
+## Architecture
+
+```mermaid
+---
+title: Anuvaad – System Architecture v2 (scope - one live English → Hindi session)
+---
+flowchart LR
+    subgraph ACT["👥 Actor"]
+        USER(("👤 Speaker<br/>speaks English,<br/>hears Hindi"))
+    end
+
+    subgraph FE["💻 Frontend · Vercel CDN"]
+        WEB["Web App<br/>React + livekit-client<br/>mic, playback, screen,<br/>keeps transcript + clips"]
+    end
+
+    subgraph BE["🔒 Backend · Vercel (trust boundary 1: access code)"]
+        TOK["Token Service<br/>Python serverless fn<br/>checks access code,<br/>signs room pass (JWT)"]
+    end
+
+    subgraph INFRA["🔒 Real-time Infra · LiveKit Cloud (trust boundary 2: JWT)"]
+        ROOM["Call Room<br/>WebRTC media server<br/>carries audio, text, events"]
+        AGENT["Interpreter Agent<br/>Python, LiveKit Agents<br/>hear → transcribe → translate → speak"]
+        MEM[("Conversation Memory<br/>agent RAM, per session<br/>last turns for context")]
+    end
+
+    subgraph EXT["🔒 Third-party AI · API keys held only by the agent (trust boundary 3)"]
+        GROQ["Groq<br/>Whisper (speech → text)<br/>gpt-oss-120b · Qwen · gpt-oss-20b<br/>(translate)"]
+        GEM["Google Gemini<br/>Flash (last-resort<br/>translator)"]
+        TTS["ElevenLabs<br/>Flash v2.5<br/>Hindi text → voice"]
+    end
+
+    USER -- "① taps mic, speaks English" --> WEB
+    WEB -- "② access code" --> TOK
+    TOK -- "③ signed room pass (JWT)" --> WEB
+    WEB -- "④ mic audio (WebRTC)" --> ROOM
+    ROOM -- "⑤ audio + 'join' job" --> AGENT
+    AGENT -- "⑥ speech clip → English text" --> GROQ
+    AGENT -- "⑦ read last turns / save new turn" --> MEM
+    AGENT -- "⑧ prompt → ACTION / EN / HINDI" --> GROQ
+    AGENT -- "⑧b same prompt, only if all Groq<br/>translators are busy" --> GEM
+    AGENT -- "⑨ Hindi text → Hindi voice" --> TTS
+    AGENT -- "⑩ Hindi audio + text" --> ROOM
+    ROOM -- "⑪ Hindi audio + text" --> WEB
+    WEB -- "⑫ 🔊 Hindi + on-screen text" --> USER
+
+    AGENT -. "events: turn · dropped ·<br/>model_status · metrics" .-> ROOM
+    ROOM -. "events" .-> WEB
+    WEB -. "settings: tone · model ·<br/>talk mode (RPC)" .-> ROOM
+    AGENT -. "background: tiny<br/>recovery probe" .-> GROQ
+
+    classDef actor fill:#ffffff,stroke:#374151,color:#111827
+    classDef fe fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef be fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef data fill:#ffedd5,stroke:#ea580c,color:#7c2d12
+    classDef ext fill:#ede9fe,stroke:#7c3aed,color:#4c1d95
+    classDef infra fill:#f3f4f6,stroke:#6b7280,color:#111827
+    class USER actor
+    class WEB fe
+    class TOK,AGENT be
+    class MEM data
+    class GROQ,GEM,TTS ext
+    class ROOM infra
+    style ACT fill:none,stroke:#9ca3af,stroke-dasharray:6 4
+    style FE fill:none,stroke:#2563eb,stroke-dasharray:6 4
+    style BE fill:none,stroke:#16a34a,stroke-dasharray:6 4
+    style INFRA fill:none,stroke:#6b7280,stroke-dasharray:6 4
+    style EXT fill:none,stroke:#7c3aed,stroke-dasharray:6 4
+```
+
+- **Web App** (Vercel) captures the mic and plays the Hindi. The **Token Service** only lets people with the access code in.
+- **LiveKit Cloud** carries the audio and runs the **Interpreter Agent**, which calls Groq, Gemini and ElevenLabs. API keys never reach the browser.
+- No database: context lives in the agent's memory for one session, and transcripts stay in the browser.
 
 ## How it works
 
-Anuvaad works like an assembly line, and every step starts before the previous one has finished:
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Speaker
+    participant W as Web App
+    participant A as Interpreter Agent
+    participant S as Groq Whisper
+    participant L as Translator (first free model)
+    participant T as ElevenLabs
 
-1. **Listen.** The browser streams the microphone (with echo cancellation) over WebRTC through LiveKit.
-2. **Know when a sentence is done.** Voice-activity detection and an end-of-sentence model decide when the speaker has finished, so half sentences aren't translated too early.
-3. **Transcribe.** Whisper (large-v3 turbo, on Groq) turns the speech into English text.
-4. **Clean up and translate, in one step.** The raw transcript goes straight to one LLM call (Qwen 3.8 27B on Groq, thinking off). A single prompt (`translator/prompts.py`) tells it to skip noise and filler-only turns, fix mis-heard words, drop fillers, pick the tone, and write natural, office-style Hindi exactly the way it should be *spoken*: numbers, times and acronyms already in Hindi words. It does nothing but translate.
-5. **Speak.** ElevenLabs Flash v2.5 says the Hindi aloud, starting as soon as the first words arrive.
-6. **Show.** The page shows the English (as heard, and as cleaned up by the model), the Hindi, a replay button and the time taken.
+    U->>W: Speaks "Can we move the meeting to 5.30 pm tomorrow?"
+    W->>A: Mic audio (via LiveKit room)
+    A->>A: Pause detected → sentence clip
+    A->>S: Speech clip
+    S-->>A: English text + confidence
+    alt only noise
+        A->>A: Drop it, nothing is translated
+    else real speech
+        A->>A: Turn detector: sentence finished
+        A->>L: Rules + last 2 turns + tone + sentence
+        alt model rate-limited or too slow
+            L-->>A: 429 / timeout
+            A->>L: Same prompt to next model in line
+        end
+        L-->>A: ACTION / EN / HINDI (streamed)
+        A->>T: Hindi text only
+        T-->>A: Hindi voice (streamed)
+        A->>W: Hindi voice + text + latency
+        W-->>U: 🔊 Hindi plays, Hindi shown on screen
+    end
+```
 
-An earlier version did the clean-up and the spoken-Hindi rewrite with hand-written rules (regex) around a translation-only prompt. It is parked in `dump/` for reference.
+1. A voice detector cuts each sentence when you pause. Groq Whisper turns it into English, and pure noise is dropped.
+2. A turn detector waits a moment if the sentence sounds unfinished.
+3. One LLM call does everything: it cleans the English, picks the tone (आप/तुम), and writes Hindi with numbers and times spelled the way they are said.
+4. Only the Hindi line is sent to ElevenLabs, which starts speaking while the rest is still arriving.
 
-## How each edge case is handled
+## Pipeline
 
-| Edge case | What Anuvaad does |
+```mermaid
+---
+title: Anuvaad – Speech-to-Speech Pipeline
+---
+flowchart LR
+    subgraph IN["Input"]
+        A1["🎙️ English speech<br/>browser mic, echo/noise cleaned"]
+    end
+
+    subgraph PRE["Preprocessing"]
+        B1["Voice detection<br/>cut clip after 0.45 s silence"]
+        B2["Speech → text<br/>Groq Whisper + noise filter"]
+        B3["End-of-turn check<br/>finished? wait 0.8 s · unsure ≤ 2.5 s"]
+    end
+
+    subgraph PROC["Processing"]
+        C1["Prompt build<br/>rules + last 2 turns + tone"]
+        C2["Translate<br/>gpt-oss-120b → Qwen → gpt-oss-20b → Gemini"]
+        C3["Reply check<br/>keep Hindi line, skip noise turns"]
+    end
+
+    subgraph OUT["Output"]
+        D1["🔊 Hindi voice<br/>ElevenLabs stream"]
+        D2["🖥️ Screen<br/>English + Hindi + latency"]
+    end
+
+    A1 -- "audio stream" --> B1
+    B1 -- "speech clip" --> B2
+    B2 -- "English text" --> B3
+    B3 -- "complete sentence" --> C1
+    C1 -- "prompt" --> C2
+    C2 -- "ACTION / EN / HINDI" --> C3
+    C3 -- "Hindi text" --> D1
+    C3 -- "English + Hindi" --> D2
+
+    classDef in fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef pre fill:#f3f4f6,stroke:#6b7280,color:#111827
+    classDef proc fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef out fill:#ede9fe,stroke:#7c3aed,color:#4c1d95
+    class A1 in
+    class B1,B2,B3 pre
+    class C1,C2,C3 proc
+    class D1,D2 out
+```
+
+## Model fallback
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Model Chain (agent)
+    participant M1 as gpt-oss-120b (Groq)
+    participant M2 as Qwen (Groq)
+    participant M3 as gpt-oss-20b (Groq)
+    participant G as Gemini (Google)
+    participant W as Web App
+
+    Note over A: Sentence ready · line-up (Auto):<br/>gpt-oss-120b → Qwen → gpt-oss-20b → Gemini
+
+    A->>M1: Prompt (5 s limit, no retries)
+    alt 429 rate limit / timeout / error before Hindi
+        M1-->>A: 429 "try again in 20 s"
+        A->>A: Mark gpt-oss-120b busy
+        A--)W: model_status: busy → "gpt-oss 120B is busy"
+        A->>M2: Same prompt
+        M2-->>A: ACTION / EN / HINDI ✅
+    else reply ended without a Hindi line (cut off)
+        M1-->>A: "ACTION… EN…" (no HINDI)
+        A->>M2: Same prompt (gpt-oss-120b stays available)
+        M2-->>A: ACTION / EN / HINDI ✅
+    else failed after Hindi had started
+        M1-->>A: Partial Hindi, then error
+        A->>A: Stop · no switch (would repeat the sentence)
+    end
+
+    opt Qwen also busy
+        A->>M3: Same prompt
+        M3-->>A: ACTION / EN / HINDI ✅
+    end
+
+    opt all three Groq models busy
+        A->>G: Same prompt (last resort)
+        alt Gemini answers
+            G-->>A: ACTION / EN / HINDI ✅
+        else Gemini fails too
+            G-->>A: error
+            A--)W: no Hindi → page shows "⚠ not translated"
+        end
+    end
+
+    Note over A,W: Next sentence: busy models are skipped straight away
+
+    Note over A,M1: Background recovery (runs in parallel)
+    A->>A: Wait the time the API gave (20 s)
+    A->>M1: Tiny probe "Reply OK" (8 tokens)
+    M1-->>A: "OK" + header: tokens left this minute
+    alt answered and ≥ 3,500 tokens left
+        A->>A: Mark gpt-oss-120b available
+        A--)W: model_status: available → "gpt-oss 120B is available again"
+    else not enough yet
+        A->>A: Wait for the reset, probe again
+    end
+```
+
+- Each free model has its own rate limit, so taking turns keeps translation going when one is busy.
+- A busy model is skipped until a tiny probe shows it is free again, so the full prompt is never re-sent just to check.
+- In the page, **Auto** follows this order and shows the model answering right now. Picking a model puts it first.
+
+## Edge cases
+
+| Case | Handling |
 |---|---|
-| **Strong accents, fast speech** | The translator is told the text came from speech recognition and translates what the speaker *meant*: a word that makes no sense is replaced by the similar-sounding one that does ("google meat" → Google Meet, "next weak" → next week). |
-| **Named entities** ("Google Meet", "Asterisk") | Company, product and app names stay in English letters (Google Meet, Zendesk, Razorpay), with Hindi grammar around them ("Google Meet पर"). People and places are written in Hindi (Priya → प्रिया, Mumbai → मुंबई). |
-| **Partial sentences** | The end-of-sentence model waits longer after "…move the meeting to". If a half sentence still gets through, it is translated as said, without inventing the rest ("क्या हम मीटिंग को…"), and the next turn completes it ("कल शाम पाँच बजे कर सकते हैं?") because the fragment is passed along as context. |
-| **Fillers** ("uh", "you know") | The model drops them, without touching real words ("I like pizza" stays). A turn that is only fillers is not spoken at all. |
-| **Noise and silence** | Speech recognition sometimes produces junk on background noise ("Me. Me. Me."). The model skips it, and the page shows the turn as dropped. Hindi speech is skipped too, since the input is English. |
-| **Latency buildup** | Every step streams into the next, translation starts before the sentence is fully confirmed, fast models are used, and the prompt stays short. The time to first Hindi audio is shown on every line. |
-| **Formal vs casual tone** | Words like "sir, kindly" or "hey dude, gonna" decide between आप and तुम. Formal is the default, the safe choice in Hindi. The tone menu can also force either. |
-| **Numbers, dates, abbreviations** | Times are said the Hindi way: 5:30 → साढ़े पाँच, 10:15 → सवा दस, 2:45 → पौने तीन, 1:30 → डेढ़, 2:30 → ढाई. Also 5 PM → शाम पाँच बजे, ₹1,500 → पंद्रह सौ रुपये, $5.30 → पाँच डॉलर तीस सेंट, 20% → बीस प्रतिशत, 3.75 करोड़ → पौने चार करोड़, ETA → पहुँचने का अनुमानित समय, HR → एचआर. The model writes them in words, so the screen shows exactly what the voice says. |
-| **Interruptions** | Echo cancellation keeps the Hindi playback out of the microphone. If the speaker talks over the Hindi, playback stops (barge-in), and the line is marked "interrupted". |
-| **The model answering instead of translating** | The translator is strictly instructed that it is not an assistant, with examples, so a question like "What time is it?" is translated rather than answered. |
+| Accents, mis-heard words | Translates what was *meant* ("google meat" → Google Meet) |
+| Names | Brands stay in English letters; people and places in Devanagari |
+| Half sentences | Waits longer; a fragment is completed on the next turn |
+| Fillers, noise | Dropped; filler-only or noise turns are not spoken |
+| Tone | आप / तुम picked from the words, or set from the menu |
+| Numbers, times | Said the Hindi way: 5:30 → साढ़े पाँच, 1:30 → डेढ़, $5.30 → पाँच डॉलर तीस सेंट |
+| Questions to the bot | Translated, never answered |
+| Interruptions | Talking over the Hindi stops it |
+| Rate limits | Automatic model fallback, plus a "slow down" hint on the page |
 
-## Using it
+**Built with:** LiveKit Agents & Cloud · Groq (Whisper, gpt-oss, Qwen) · Google Gemini · ElevenLabs Flash v2.5 · React + Vite on Vercel.
 
-Listening never starts on its own. First tap the mic (or **Start session**) and allow the microphone. Then:
+## Screenshots
 
-- **Hands-free** (default): just talk; a short pause ends each sentence.
-- **Hold to talk**: hold the mic button (or the Space bar) while speaking. Good for noisy rooms.
-- **Tone**: Auto, Formal (आप) or Casual (तुम).
-- **Replay and download**: every Hindi line has a ▶ Play button. The icons beside the mic download the transcript and the full Hindi audio.
+The conversation screenshots use sample lines.
 
-Headphones give the cleanest experience.
+**Web**
 
-## Speed
-
-| Step | Typical time |
+| Start | Conversation |
 |---|---|
-| Knowing the sentence has ended | 0.4–0.6 s |
-| Speech to English text | 0.2–0.4 s |
-| First words of the translation | 0.3–0.5 s |
-| First Hindi audio | 0.2–0.3 s |
-| **End of speech → first Hindi audio** | **≈ 1.2–2 s** |
+| ![Web start screen](docs/screenshots/web-start.png) | ![Web conversation](docs/screenshots/web-conversation.png) |
 
-Measured on the live deployment (previous, regex-based version):
+**Mobile**
 
-| Spoken English | Hindi | Total |
-|---|---|---|
-| "Uh, can we move the meeting to 5 PM tomorrow?" | क्या हम मीटिंग को कल शाम 5 बजे कर सकते हैं? | **1.4–1.8 s** |
-| "The meeting is at 5:30 pm today." | मीटिंग आज शाम साढ़े 5 बजे है। (spoken: साढ़े पाँच) | **1.2 s** |
-| "Please join the Google Meet, the Asterisk server is down." | कृपया Google Meet में जुड़िए, Asterisk सर्वर डाउन है। | **1.9 s** |
-
-## Quality checks
-
-- **Prompt lab** (`scripts/prompt_lab.py`) sends 52 tricky turns (fillers, noise, names, times, money, tone, half sentences and their continuations) to the real model with the live prompt, checks each answer automatically and prints PASS/FAIL. Latest run with Qwen 3.8 27B: 48/50 on the earlier set; see `out/prompt_lab_results.md`.
-- **Automated tests** (`pytest`) run the real agent with a fake model: only the Hindi line reaches the voice, skipped turns stay silent and out of the context, and earlier turns are passed along correctly.
-
-## Built with
-
-LiveKit Agents (real-time audio and turn-taking) · Groq Whisper (speech to text) · Groq Qwen 3.8 27B (translation) · ElevenLabs Flash v2.5 (Hindi voice) · Vercel (web page) · LiveKit Cloud (agent hosting). Every service runs on its free tier.
-
-## Known limitations and next steps
-
-- Translation happens per sentence, not word by word. That's deliberate: Hindi puts the verb at the end, so it needs the whole sentence.
-- Hinglish (Hindi spoken in English words) works, but speech recognition is tuned for English, so accuracy varies.
-- Speech recognition is the slowest step. A streaming speech-to-text service would save about half a second.
-- Next ideas: phone-call support, and separate voices for different speakers in a group call.
+| Start | Conversation |
+|---|---|
+| <img src="docs/screenshots/mobile-start.png" alt="Mobile start screen" width="300"> | <img src="docs/screenshots/mobile-conversation.png" alt="Mobile conversation" width="300"> |
