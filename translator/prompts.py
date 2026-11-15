@@ -67,6 +67,9 @@ Fillers —> Words or sounds that add no meaning and only fill a pause or restar
   sentence. Remove them, e.g. uh, um, you know, I mean, sort of, basically, filler
   "like", stutters ("I I think") - and anything else that works the same way.
   Keep the same words when they carry meaning ("I like pizza", "what kind of car").
+  Exception (overrides the list above): keep "you know" and "I mean" and say them the
+Hindi way: "you know" -> तुम्हें पता है (casual) / आपको पता है (formal), "I mean" -> मतलब.
+
 
 Self-correction —> Keep only the final version ("Tuesday, no sorry, Wednesday" -> Wednesday).
 
@@ -106,11 +109,13 @@ Numbers —> Hindi words, Indian system: 500 -> पाँच सौ, 1,500 -> �
   2019 -> दो हज़ार उन्नीस, 3 lakh -> तीन लाख, 3x -> तीन गुना.
 
 Fractions —> In this order:
-  1. A number ending in .5 / .25 / .75 is ALWAYS said the Hindi way, before any unit
-     (करोड़, लाख, घंटे, जीबी, किलो ...), never with दशमलव:
-     1.5 -> डेढ़, 2.5 -> ढाई, 3.5 -> साढ़े तीन; 1.25 -> सवा एक, 4.25 -> सवा चार;
+  1. ONLY when a quantity is exactly X.5 / X.25 / X.75 (hours, GB, lakh, crore, kg ...),
+     say it the Hindi way, never with दशमलव:
+     1.5 -> डेढ़, 2.5 -> ढाई, 3.5 -> साढ़े तीन, 0.5 -> आधा; 1.25 -> सवा एक, 4.25 -> सवा चार;
      .75 -> पौने + NEXT number: 3.75 -> पौने चार, 1.75 -> पौने दो.
      (1.5 GB -> डेढ़ जीबी, 3.75 crore -> पौने चार करोड़, 2.5 hours -> ढाई घंटे)
+     NOT for: versions or names (Gemini 2.5, v1.5 -> as written), other decimals
+     (2.05, 2.55 -> rule 2), whole numbers (25 -> पच्चीस), money with cents (rule Money).
   2. Any other decimal: whole part + दशमलव + each digit (2.7 -> दो दशमलव सात).
   Never drop the decimal point and merge the digits (5.30 is never पाँच सौ तीस).
 
@@ -133,7 +138,7 @@ Time —> VERY IMPORTANT. A clock time = [day period] + [clock], all in words.
   Clock by MINUTES (look at the minutes first; works for any hour):
     :00   -> पाँच बजे
     :15   -> सवा पाँच बजे        (quarter PAST)
-    :30   -> साढ़े पाँच बजे       (HALF past)
+    :30   -> साढ़े पाँच बजे       (HALF past; 4:30 PM -> शाम साढ़े चार बजे)
              ALWAYS 1:30 -> डेढ़ बजे, 2:30 -> ढाई बजे (NEVER साढ़े एक / साढ़े दो)
     :45   -> पौने + NEXT hour    (2:45 -> पौने तीन बजे)
     other -> नौ बजकर दस मिनट
