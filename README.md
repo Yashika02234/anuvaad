@@ -127,69 +127,6 @@ sequenceDiagram
 3. One LLM call does everything: it cleans the English, picks the tone (आप/तुम), and writes Hindi with numbers and times spelled the way they are said.
 4. Only the Hindi line is sent to ElevenLabs, which starts speaking while the rest is still arriving.
 
-### When a model is busy
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant A as Model Chain (agent)
-    participant M1 as gpt-oss-120b (Groq)
-    participant M2 as Qwen (Groq)
-    participant M3 as gpt-oss-20b (Groq)
-    participant G as Gemini (Google)
-    participant W as Web App
-
-    Note over A: Sentence ready · line-up (Auto):<br/>gpt-oss-120b → Qwen → gpt-oss-20b → Gemini
-
-    A->>M1: Prompt (5 s limit, no retries)
-    alt 429 rate limit / timeout / error before Hindi
-        M1-->>A: 429 "try again in 20 s"
-        A->>A: Mark gpt-oss-120b busy
-        A--)W: model_status: busy → "gpt-oss 120B is busy"
-        A->>M2: Same prompt
-        M2-->>A: ACTION / EN / HINDI ✅
-    else reply ended without a Hindi line (cut off)
-        M1-->>A: "ACTION… EN…" (no HINDI)
-        A->>M2: Same prompt (gpt-oss-120b stays available)
-        M2-->>A: ACTION / EN / HINDI ✅
-    else failed after Hindi had started
-        M1-->>A: Partial Hindi, then error
-        A->>A: Stop · no switch (would repeat the sentence)
-    end
-
-    opt Qwen also busy
-        A->>M3: Same prompt
-        M3-->>A: ACTION / EN / HINDI ✅
-    end
-
-    opt all three Groq models busy
-        A->>G: Same prompt (last resort)
-        alt Gemini answers
-            G-->>A: ACTION / EN / HINDI ✅
-        else Gemini fails too
-            G-->>A: error
-            A--)W: no Hindi → page shows "⚠ not translated"
-        end
-    end
-
-    Note over A,W: Next sentence: busy models are skipped straight away
-
-    Note over A,M1: Background recovery (runs in parallel)
-    A->>A: Wait the time the API gave (20 s)
-    A->>M1: Tiny probe "Reply OK" (8 tokens)
-    M1-->>A: "OK" + header: tokens left this minute
-    alt answered and ≥ 3,500 tokens left
-        A->>A: Mark gpt-oss-120b available
-        A--)W: model_status: available → "gpt-oss 120B is available again"
-    else not enough yet
-        A->>A: Wait for the reset, probe again
-    end
-```
-
-- Each free model has its own rate limit, so taking turns keeps translation going when one is busy.
-- A busy model is skipped until a tiny probe shows it is free again, so the full prompt is never re-sent just to check.
-- In the page, **Auto** follows this order and shows the model answering right now. Picking a model puts it first.
-
 ### Edge cases
 
 | Case | Handling |
@@ -251,15 +188,68 @@ flowchart LR
     class D1,D2 out
 ```
 
-## Database Schema
+### Model fallback (the Translate stage)
 
-No database. Nothing is stored on a server after a session ends.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Model Chain (agent)
+    participant M1 as gpt-oss-120b (Groq)
+    participant M2 as Qwen (Groq)
+    participant M3 as gpt-oss-20b (Groq)
+    participant G as Gemini (Google)
+    participant W as Web App
 
-| Data | Where | Lifetime |
-|---|---|---|
-| Last turns (context for the LLM) | Agent memory | One session |
-| Transcript + Hindi audio clips | Browser memory | Until the tab closes or you download them |
-| API keys, access code | LiveKit agent secrets · Vercel env vars | Permanent, never sent to the browser |
+    Note over A: Sentence ready · line-up (Auto):<br/>gpt-oss-120b → Qwen → gpt-oss-20b → Gemini
+
+    A->>M1: Prompt (5 s limit, no retries)
+    alt 429 rate limit / timeout / error before Hindi
+        M1-->>A: 429 "try again in 20 s"
+        A->>A: Mark gpt-oss-120b busy
+        A--)W: model_status: busy → "gpt-oss 120B is busy"
+        A->>M2: Same prompt
+        M2-->>A: ACTION / EN / HINDI ✅
+    else reply ended without a Hindi line (cut off)
+        M1-->>A: "ACTION… EN…" (no HINDI)
+        A->>M2: Same prompt (gpt-oss-120b stays available)
+        M2-->>A: ACTION / EN / HINDI ✅
+    else failed after Hindi had started
+        M1-->>A: Partial Hindi, then error
+        A->>A: Stop · no switch (would repeat the sentence)
+    end
+
+    opt Qwen also busy
+        A->>M3: Same prompt
+        M3-->>A: ACTION / EN / HINDI ✅
+    end
+
+    opt all three Groq models busy
+        A->>G: Same prompt (last resort)
+        alt Gemini answers
+            G-->>A: ACTION / EN / HINDI ✅
+        else Gemini fails too
+            G-->>A: error
+            A--)W: no Hindi → page shows "⚠ not translated"
+        end
+    end
+
+    Note over A,W: Next sentence: busy models are skipped straight away
+
+    Note over A,M1: Background recovery (runs in parallel)
+    A->>A: Wait the time the API gave (20 s)
+    A->>M1: Tiny probe "Reply OK" (8 tokens)
+    M1-->>A: "OK" + header: tokens left this minute
+    alt answered and ≥ 3,500 tokens left
+        A->>A: Mark gpt-oss-120b available
+        A--)W: model_status: available → "gpt-oss 120B is available again"
+    else not enough yet
+        A->>A: Wait for the reset, probe again
+    end
+```
+
+- Each free model has its own rate limit, so taking turns keeps translation going when one is busy.
+- A busy model is skipped until a tiny probe shows it is free again, so the full prompt is never re-sent just to check.
+- In the page, **Auto** follows this order and shows the model answering right now. Picking a model puts it first.
 
 ## Tech Stack
 
