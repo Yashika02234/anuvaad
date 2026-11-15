@@ -44,7 +44,7 @@ function Row({ row }) {
 export default function Conversation({ rows }) {
   // keep the newest line in view (no extra element: the CSS styles the last .row specially)
   useEffect(() => {
-    document.querySelector(".rows > .row:last-child")?.scrollIntoView({ block: "end", behavior: "smooth" });
+    document.querySelector(".rows > .row:last-of-type")?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [rows.length]);
   return rows.map((r) => <Row key={r.id} row={r} />);
 }

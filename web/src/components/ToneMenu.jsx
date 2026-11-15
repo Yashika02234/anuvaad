@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 
-const OPTIONS = [
+const TONE_OPTIONS = [
   { v: "auto", label: "Auto", button: "Tone · Auto", hint: "Picks आप or तुम for you" },
   { v: "formal", label: "Formal · आप", button: "Formal · आप", hint: "Polite: work, clients, elders" },
   { v: "casual", label: "Casual · तुम", button: "Casual · तुम", hint: "Friendly: friends and peers" },
 ];
 
-/** Styled replacement for a native <select> (whose popup can't be styled). */
-export default function ToneMenu({ value, onChange }) {
+/** Styled replacement for a native <select> (whose popup can't be styled).
+ *  Used for the tone and the model menus (same look, different options). */
+export default function ToneMenu({ value, onChange, options = TONE_OPTIONS, id = "tone", title = "Hindi politeness level", label = "Tone", className = "tone" }) {
+  const OPTIONS = options;
   const [open, setOpen] = useState(false);
   const wrap = useRef(null);
   const btn = useRef(null);
@@ -39,13 +41,13 @@ export default function ToneMenu({ value, onChange }) {
   };
 
   return (
-    <div className="tone" ref={wrap}>
-      <button ref={btn} type="button" id="tone-btn" className="tone-btn" aria-haspopup="listbox"
-              aria-expanded={open} title="Hindi politeness level" onClick={() => setOpen((x) => !x)}>
-        <span id="tone-label">{current.button}</span>
+    <div className={className} ref={wrap}>
+      <button ref={btn} type="button" id={`${id}-btn`} className="tone-btn" aria-haspopup="listbox"
+              aria-expanded={open} title={title} onClick={() => setOpen((x) => !x)}>
+        <span id={`${id}-label`}>{current.button}</span>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
       </button>
-      <ul className="tone-list" id="tone-list" role="listbox" aria-label="Tone" hidden={!open} onKeyDown={onKeyDown}>
+      <ul className="tone-list" id={`${id}-list`} role="listbox" aria-label={label} hidden={!open} onKeyDown={onKeyDown}>
         {OPTIONS.map((o, i) => (
           <li key={o.v} ref={(el) => { items.current[i] = el; }} role="option" tabIndex={-1}
               aria-selected={o.v === value} onClick={() => choose(o)}>

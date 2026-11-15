@@ -1,4 +1,4 @@
-﻿/* Bolo: editorial, light. Pale sage ivory, forest ink, one deep-burgundy accent. */
+﻿/* Anuvaad: editorial, light. Pale sage ivory, forest ink, one deep-burgundy accent. */
 :root {
   color-scheme: light;
   --bg: #ecedde;          /* pale sage ivory */
@@ -53,17 +53,25 @@ button.end:hover { background: rgba(90, 10, 7, .06); }
   display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: center; justify-content: space-between;
   padding: 18px 56px;
 }
-.brand { font: 600 19px/1 var(--display); letter-spacing: -.02em; }
+.brand { display: inline-flex; align-items: baseline; font: 500 19px/1 var(--display); letter-spacing: -.01em; }
+.brand-a { margin-right: 1px; font: 700 28px/1 var(--hi); color: var(--burgundy); }
 .controls { display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
+.top-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+/* small rounded buttons (header actions) */
+button.pill { display: inline-flex; align-items: center; gap: 7px; padding: 6px 14px; font-size: 12.5px; background: var(--surface); border-color: var(--line); }
+button.pill:hover { border-color: var(--line-2); }
+button.pill svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+button.pill[aria-pressed="false"] { color: var(--muted); }
+button.pill.end { color: var(--burgundy); border-color: var(--burgundy); background: transparent; }
 
-/* mode switch as quiet text tabs with an underline */
-.seg { display: inline-flex; gap: 16px; }
+/* talk mode: segmented pill, the active option is a raised white pill */
+.seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--sage-soft); }
 .seg button {
-  border: 0; border-radius: 0; padding: 6px 0; background: transparent; color: var(--muted); font-size: 13px;
-  box-shadow: inset 0 -2px 0 transparent; transition: color .15s, box-shadow .2s;
+  border: 0; border-radius: 999px; padding: 5px 14px; background: transparent; color: var(--muted); font-size: 12.5px;
+  transition: color .15s, background .15s, box-shadow .15s;
 }
-.seg button:hover { color: var(--ink); }
-.seg button.on { color: var(--ink); box-shadow: inset 0 -2px 0 var(--ink); }
+.seg button:hover { color: var(--ink); border: 0; }
+.seg button.on { color: var(--ink); background: var(--surface); box-shadow: 0 1px 2px rgba(29, 42, 30, .12); }
 
 /* tone menu: text button + a small cream popover */
 .tone { position: relative; }
@@ -99,36 +107,42 @@ button.end:hover { background: rgba(90, 10, 7, .06); }
 .layout { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1180px; margin: 0 auto; padding: 0 56px; }
 /* the conversation sits just above the mic and grows upwards, like live captions */
-.rows { flex: 1; display: flex; flex-direction: column; padding: 8px 0 190px; }
+.rows { flex: 1; display: flex; flex-direction: column; padding: 8px 0 250px; }
 .rows:has(.row) { justify-content: flex-end; }
 
 /* ---------- empty state ---------- */
-.empty { padding: 5vh 0 0; }
+.empty { padding: 7vh 0 0; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 64px; align-items: start; }
+.tries-title { margin: 0 0 6px; font-size: 10.5px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--burgundy); opacity: .75; }
 .badge { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 18px; font-size: 12px; color: var(--burgundy); }
 .badge i { width: 6px; height: 6px; border-radius: 50%; background: var(--sage); }
-.hero { margin: 0 0 40px; font: 600 clamp(44px, 7.6vw, 104px)/.98 var(--display); letter-spacing: -.045em; color: var(--ink); }
+.hero { margin: 0 0 28px; font: 600 clamp(38px, 4.9vw, 68px)/1.02 var(--display); letter-spacing: -.045em; color: var(--ink); }
 .hero span { color: var(--sage); }
 .empty-lead { margin: 0 0 22px; max-width: 380px; color: var(--muted); font-size: 13.5px; }
 .empty-lead b { color: var(--ink); font-weight: 600; }
-.tries { display: grid; grid-template-columns: 1fr 1fr; column-gap: 56px; }
-.try { padding: 14px 0 16px; border-top: 1px solid var(--line); color: var(--ink); font-size: 15px; }
+.tries { display: grid; grid-template-columns: 1fr; }
+.try { padding: 11px 0 12px; border-top: 1px solid var(--line); color: var(--ink); font-size: 14px; }
 .try span { display: block; margin-bottom: 4px; font-size: 10.5px; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
 .try i { color: var(--muted); }
+
+/* quiet ⓘ note */
+.info-note { display: flex; gap: 9px; align-items: flex-start; max-width: 440px; margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--ink-2); }
+.info-note svg { flex: none; width: 15px; height: 15px; margin-top: 2px; fill: none; stroke: var(--burgundy); stroke-width: 2; stroke-linecap: round; }
+.rows > .info-note { margin-top: 4px; }
 
 /* ---------- conversation ---------- */
 .row { max-width: 920px; padding: 18px 0; animation: rise .45s cubic-bezier(.2, .8, .2, 1); }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
 
 /* older lines: smaller, faded, no controls; a hairline separates them from the newest */
-.rows > .row:not(:last-child) { padding: 12px 0 18px; border-bottom: 1px solid var(--line); transition: opacity .3s; }
-.rows > .row:not(:last-child) .en .raw, .rows > .row:not(:last-child) .en .clean { font-size: 13px; color: var(--faded); }
-.rows > .row:not(:last-child) .hi .text { font-size: 19px; color: var(--sage-2); margin-top: 4px; }
-.rows > .row:not(:last-child) .meta { display: none; }
-.rows > .row:not(:last-child):hover .meta { display: flex; }
-.rows > .row:not(:last-child):hover .hi .text { color: var(--sage); }
+.rows > .row:not(:last-of-type) { padding: 12px 0 18px; border-bottom: 1px solid var(--line); transition: opacity .3s; }
+.rows > .row:not(:last-of-type) .en .raw, .rows > .row:not(:last-of-type) .en .clean { font-size: 13px; color: var(--faded); }
+.rows > .row:not(:last-of-type) .hi .text { font-size: 19px; color: var(--sage-2); margin-top: 4px; }
+.rows > .row:not(:last-of-type) .meta { display: none; }
+.rows > .row:not(:last-of-type):hover .meta { display: flex; }
+.rows > .row:not(:last-of-type):hover .hi .text { color: var(--sage); }
 
 /* newest line */
-.rows > .row:last-child { padding-top: 26px; }
+.rows > .row:last-of-type { padding-top: 26px; }
 .en .raw { color: var(--muted); font-size: 13px; }
 .en .raw.live { color: var(--ink-2); font-size: 16px; }
 .en .raw.live::after { content: ""; display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -2px; background: var(--burgundy); animation: blink 1s steps(1) infinite; }
@@ -175,14 +189,8 @@ main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1
   position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 5;
   display: flex; flex-direction: column; align-items: center; gap: 6px;
 }
-.dock-row { display: flex; align-items: center; gap: 22px; }
-/* download icons either side of the mic; they keep their place while hidden so the mic stays centred */
-.dock-row button.icon {
-  width: 34px; height: 34px; padding: 0; display: grid; place-items: center; border: 0; color: var(--muted); background: transparent;
-}
-.dock-row button.icon[hidden] { visibility: hidden; }
-.dock-row button.icon:hover { color: var(--ink); background: rgba(29, 42, 30, .06); }
-button.icon svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.dock-row { position: relative; display: flex; align-items: center; gap: 22px; }
+
 
 /* soft halo around the mic */
 .halo {
@@ -221,6 +229,12 @@ button.icon svg { width: 17px; height: 17px; fill: none; stroke: currentColor; s
 }
 .notice.warn { background: #fff; border: 1px solid var(--warn); color: var(--warn); }
 
+.orb-label[hidden] { display: none; }
+/* controls under the mic: talk mode · tone · model (menus open upwards) */
+.dock-controls { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px; margin-top: 6px; }
+.dock-controls .tone-btn { padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 12.5px; }
+.dock-controls .tone-btn:hover { border: 1px solid var(--line-2); color: var(--ink); }
+.up .tone-list { top: auto; bottom: calc(100% + 10px); transform-origin: bottom right; }
 .orb-label { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .orb-label.err { color: var(--burgundy); white-space: normal; max-width: 80vw; text-align: center; }
 
@@ -264,7 +278,9 @@ button.icon svg { width: 17px; height: 17px; fill: none; stroke: currentColor; s
   .top { padding: 14px 18px; }
   .controls { gap: 12px; }
   main { padding: 0 18px; }
-  .tries { grid-template-columns: 1fr; }
+  .empty { grid-template-columns: minmax(0, 1fr); gap: 28px; padding-top: 3vh; }
   .hi .text { font-size: 26px; }
-  .rows > .row:not(:last-child) .hi .text { font-size: 17px; }
+  .rows > .row:not(:last-of-type) .hi .text { font-size: 17px; }
+  .dock-controls { gap: 8px; }
+  .up .tone-list { right: 50%; margin-right: -125px; width: 250px; }
 }

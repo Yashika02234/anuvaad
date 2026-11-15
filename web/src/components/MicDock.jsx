@@ -1,8 +1,15 @@
 import { useEffect, useRef } from "react";
 import { engine } from "../useInterpreter";
+import ModelMenu from "./ModelMenu.jsx";
+import ToneMenu from "./ToneMenu.jsx";
 
-/** Transcript download · mic (with halo) · Hindi audio download, and the status below. */
-export default function MicDock({ orb, connected, inputMode, hasTranscript, hasAudio, notice }) {
+const MODES = [
+  { id: "auto", label: "Hands-free", title: "Just talk; a short pause ends each sentence. Tap the mic again to end" },
+  { id: "ptt", label: "Hold to talk", title: "Hold the mic button (or Space) while you speak" },
+];
+
+/** Notice · mic (with halo) · status · controls (talk mode, tone, model). */
+export default function MicDock({ orb, connected, inputMode, notice, model, activeModel, tone }) {
   // Hands-free: the mic toggles the session (tap to start, tap again to end).
   // Hold to talk: pressing the mic means "talk", so that session is ended from the header.
   const canEnd = connected && inputMode !== "ptt";
@@ -41,11 +48,6 @@ export default function MicDock({ orb, connected, inputMode, hasTranscript, hasA
         </div>
       )}
       <div className="dock-row">
-        <button id="dl-text" className="icon" hidden={!hasTranscript} title="Download transcript (English → Hindi)"
-                aria-label="Download transcript" onClick={engine.downloadTranscript}>
-          {/* document with a download arrow */}
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" /><path d="M14 3v6h6" /><path d="M12 11v6M9.5 14.5 12 17l2.5-2.5" /></svg>
-        </button>
         <div className="halo" ref={halo}>
           <button id="orb" ref={orbBtn} className={canEnd ? "orb can-end" : "orb"} data-state={orb.state}
                   aria-live="polite" aria-label={canEnd ? `${orb.aria}. Tap to end the session` : orb.aria}
@@ -56,21 +58,21 @@ export default function MicDock({ orb, connected, inputMode, hasTranscript, hasA
             <svg className="ic-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" /></svg>
           </button>
         </div>
-        <button id="dl-audio" className="icon" hidden={!hasAudio} title="Download Hindi audio (WAV)"
-                aria-label="Download Hindi audio" onClick={engine.downloadAudio}>
-          {/* sound waveform with a download arrow (not a speaker, which reads as "volume") */}
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10v4M6 7v10M9 4v16M12 8v8" /><path d="M18 4v11M15 12l3 3 3-3M15 20h6" /></svg>
-        </button>
       </div>
-      <div id="orb-label" className={orb.error ? "orb-label err" : "orb-label"}>
+      <div id="orb-label" className={orb.error ? "orb-label err" : "orb-label"} hidden={orb.state === "idle" && !orb.error}>
         <span className="bars" aria-hidden="true"><i /><i /><i /><i /></span>
         <span id="orb-text">{orb.label}</span>
       </div>
-      {connected && (
-        <div className="orb-hint">
-          {canEnd ? "Tap the mic to end the session" : "Use End session (top right) to finish"}
+      <div className="dock-controls">
+        <div className="seg" role="group" aria-label="How to talk">
+          {MODES.map((x) => (
+            <button key={x.id} className={inputMode === x.id ? "on" : ""} title={x.title}
+                    onClick={() => engine.setInputMode(x.id)}>{x.label}</button>
+          ))}
         </div>
-      )}
+        <ToneMenu value={tone} onChange={engine.setTone} className="tone up" />
+        <ModelMenu value={model} onChange={engine.setModel} active={activeModel} />
+      </div>
     </div>
   );
 }
