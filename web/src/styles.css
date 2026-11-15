@@ -120,6 +120,7 @@ main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1
 .empty-lead { margin: 0 0 22px; max-width: 380px; color: var(--muted); font-size: 13.5px; }
 .empty-lead b { color: var(--ink); font-weight: 600; }
 .tries { display: grid; grid-template-columns: 1fr; }
+.tries-dots { display: none; }
 .try { padding: 11px 0 12px; border-top: 1px solid var(--line); color: var(--ink); font-size: 14px; }
 .try span { display: block; margin-bottom: 4px; font-size: 10.5px; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
 .try i { color: var(--muted); }
@@ -186,9 +187,13 @@ main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1
 
 /* ---------- mic dock ---------- */
 .orb-dock {
-  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 5;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
   display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 36px 16px max(22px, env(safe-area-inset-bottom));
+  background: linear-gradient(to top, var(--bg) 68%, rgba(236, 237, 222, 0));
+  pointer-events: none; /* the faded strip doesn't block the page; its controls do */
 }
+.orb-dock > * { pointer-events: auto; }
 .dock-row { position: relative; display: flex; align-items: center; gap: 22px; }
 
 
@@ -281,6 +286,49 @@ main { flex: 1; display: flex; flex-direction: column; width: 100%; max-width: 1
   .empty { grid-template-columns: minmax(0, 1fr); gap: 28px; padding-top: 3vh; }
   .hi .text { font-size: 26px; }
   .rows > .row:not(:last-of-type) .hi .text { font-size: 17px; }
-  .dock-controls { gap: 8px; }
-  .up .tone-list { right: 50%; margin-right: -125px; width: 250px; }
+  .rows { padding-bottom: 295px; } /* the controls wrap onto two lines here */
+  /* examples: horizontal cards that snap, the next one peeking in from the right */
+  .tries {
+    display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none;
+    margin-right: -18px; padding: 2px 18px 4px 0;
+  }
+  .tries::-webkit-scrollbar { display: none; }
+  .try {
+    flex: 0 0 72%; scroll-snap-align: start; padding: 14px 14px 16px; border: 0; border-radius: 14px;
+    background: var(--surface); box-shadow: 0 1px 2px rgba(29, 42, 30, .06); font-size: 15px;
+  }
+  .tries-dots { display: flex; gap: 6px; margin-top: 12px; }
+  .tries-dots button { width: 6px; height: 6px; padding: 0; border: 0; border-radius: 3px; background: var(--line-2); transition: width .2s, background .2s; }
+  .tries-dots button.on { width: 18px; background: var(--ink-2); }
+  .rows > .info-note { display: none; }
+
+  /* controls: talk switch full width, then tone + model as two equal buttons */
+  .dock-controls {
+    position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    width: 100%; max-width: 420px;
+  }
+  .dock-controls .seg { grid-column: 1 / -1; display: flex; }
+  .dock-controls .seg button { flex: 1; padding: 8px 12px; font-size: 13px; }
+  .dock-controls .tone { position: static; }
+  .dock-controls .tone-btn { width: 100%; justify-content: center; padding: 9px 12px; font-size: 13px; }
+  .up .tone-list { left: 0; right: 0; margin: 0 auto; width: min(300px, 100%); transform-origin: bottom center; }
+}
+
+/* very narrow phones */
+@media (max-width: 380px) {
+  .top { padding: 12px 14px; }
+  main { padding: 0 14px; }
+  .hero { font-size: 34px; }
+  button.pill { padding: 6px 11px; }
+}
+
+/* short screens (phone in landscape): smaller mic so the conversation stays visible */
+@media (max-height: 560px) {
+  .halo { width: 70px; height: 70px; }
+  .orb { width: 50px; height: 50px; }
+  .orb-dock { padding-top: 20px; gap: 4px; }
+  .rows { padding-bottom: 200px; }
+  .empty { padding-top: 2vh; }
+  .top { position: static; }           /* header scrolls away: every pixel of height counts */
+  .rows > .info-note { display: none; } /* the start screen already explains this */
 }

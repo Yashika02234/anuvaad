@@ -42,9 +42,10 @@ function Row({ row }) {
 }
 
 export default function Conversation({ rows }) {
-  // keep the newest line in view (no extra element: the CSS styles the last .row specially)
+  // keep the newest line in view: scroll to the page bottom, whose padding keeps it above the
+  // mic (scrolling the row itself to the screen edge would put it behind the mic)
   useEffect(() => {
-    document.querySelector(".rows > .row:last-of-type")?.scrollIntoView({ block: "end", behavior: "smooth" });
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
   }, [rows.length]);
   return rows.map((r) => <Row key={r.id} row={r} />);
 }
