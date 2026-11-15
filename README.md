@@ -1,6 +1,6 @@
 # Anuvaad (अनुवाद): Live English → Hindi Voice Interpreter
 
-**Live demo:** [anuvaadx.vercel.app](https://anuvaadx.vercel.app) (access code shared separately)
+**Live demo:** [anuvaadx.vercel.app](https://anuvaadx.vercel.app/?code=gnani-w2j03n)
 
 Speak English, hear natural spoken Hindi about **1.2–2 seconds** later. Anuvaad transcribes your speech, translates it with an LLM that writes Hindi the way it is *spoken*, and reads it out loud.
 
